@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars (gitignored) and replace the documentation ranges (RFC 5737) with your own.
+# aws_region = "us-west-2"
+
+policy = {
+  # SaaS gateway: only cf-connecting-ip is trustworthy (see README "Findings").
+  ip_headers = ["cf-connecting-ip"]
+
+  # Corporate / SASE egress ranges allowed to use the gateway. Cover the whole NAT pool.
+  allow_cidrs = [
+    "192.0.2.0/24",
+    "198.51.100.0/24",
+  ]
+
+  deny_cidrs = []
+
+  header_rules = [
+    { header = "x-app", deny = "blockme" },
+    # { header = "x-team", require = "^(eng|finance)$" },
+  ]
+}

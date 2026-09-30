@@ -1,0 +1,14 @@
+# Tenant/deployment-specific, never committed (see *.example)
+infra/terraform.tfvars
+infra/*.auto.tfvars
+infra/backend.tf
+CLAUDE.local.md
+.env
+**/.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+tfplan
+infra/.build/
+__pycache__/
+gateway-key.json

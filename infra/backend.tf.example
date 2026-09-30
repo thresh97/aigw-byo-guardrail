@@ -1,0 +1,8 @@
+# Optional remote state. Copy to backend.tf (gitignored) and fill in, or skip it to keep local state.
+terraform {
+  backend "gcs" {
+    bucket = "<your-state-bucket>"
+    prefix = "aigw-byo-guardrail"
+  }
+  # or: backend "s3" { bucket = "<bucket>", key = "aigw-byo-guardrail/terraform.tfstate", region = "<region>" }
+}
