@@ -5,6 +5,10 @@ A bring-your-own guardrail for the Prisma AIRS / Portkey AI Gateway
 It blocks LLM requests based on request metadata the built-in guardrails can't match: the client IP
 (CIDR allow and deny lists) and arbitrary request headers (regex require or deny rules).
 
+> **Disclaimer:** This is a simple, art-of-the-possible example of a bring-your-own guardrail. It is **not** an official
+> Palo Alto Networks or Portkey project, it is **not** a recommended or supported production design, and it comes with
+> **no support**. Use it at your own risk, under the [MIT License](LICENSE).
+
 ```
 client ──► AI Gateway (SaaS) ──► LLM provider
                │ default.webhook (beforeRequestHook, forwardHeaders: cf-connecting-ip, x-app)
@@ -139,3 +143,7 @@ What the webhook actually receives when the client sends each header (taken from
   should fail closed. That case hasn't been tested yet.
 - `cf-connecting-ip` exists only on the SaaS gateway. On a hybrid or self-hosted gateway, use an IP header set by your own load
   balancer and make sure clients can't set it.
+
+## License
+
+[MIT](LICENSE). Provided as-is, with no support and no warranty. This is an example, not an official or recommended product.
