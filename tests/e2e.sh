@@ -2,7 +2,7 @@
 # e2e.sh: end-to-end test of the webhook guardrail through a real gateway (run from the repo root, after `terraform apply`).
 #
 #   bash tests/e2e.sh wire                       # create <PREFIX>-closed/-open guardrails, configs and service keys
-#   bash tests/e2e.sh ask <label> [curl args]    # one /v1/messages request; prints label, HTTP code, verdicts, reason
+#   bash tests/e2e.sh ask <label> [curl args]    # one /v1/messages request; prints label, key, HTTP code, verdicts, reason, trace id
 #   bash tests/e2e.sh policy <file.tfvars>       # apply a test policy (copied to infra/probe.auto.tfvars, gitignored)
 #   bash tests/e2e.sh policy reset               # remove the test policy and apply again
 #   bash tests/e2e.sh down | up                  # webhook unreachable (Lambda reserved concurrency 0) | reachable again
@@ -10,7 +10,9 @@
 #   bash tests/e2e.sh teardown                   # delete what `wire` created
 #
 # Env: GW_URL (gateway base URL, e.g. https://aigw.portkey.ai), WS_ID (workspace UUID), TSG (tenant TSG ID),
-# KEY=closed|open (which guardrail `ask` goes through, default closed), OUT (dir for full response bodies, optional),
+# KEY=closed|open (which guardrail `ask` goes through, default closed), OUT (dir for response bodies and headers, optional),
+# RUN (readable run name; every `ask` sends x-portkey-trace-id <RUN>-<label>, default <PREFIX>-<UTC time>),
+# NOTE (optional: what this case tests and expects; sent with run, case and guardrail in x-portkey-metadata),
 # FORWARD_HEADERS (comma list, default: the IP headers worth inspecting plus x-app),
 # UPSTREAM_HOST (optional: an Anthropic-compatible mock as custom_host; otherwise Anthropic itself, with the client's bearer),
 # BEARER (client bearer for the provider; default a dummy, fine with a mock), MOCK_LOG_GROUP (optional, for `logs`),
@@ -59,16 +61,22 @@ case ${1:-} in
   ask)
     : "${GW_URL:?set GW_URL}"; label=${2:?label}; shift 2
     keyfile=$STATE/${KEY:-closed}.key; [ -f "$keyfile" ] || { echo "no $keyfile; run wire first" >&2; exit 1; }
-    body=$(mktemp); trap 'rm -f "$body"' EXIT
-    code=$(curl -s -m 60 -o "$body" -w '%{http_code}' "$GW_URL/v1/messages" \
+    # Readable trace id and metadata, so the gateway's logs say which case each request was (they also reach the webhook).
+    trace="${RUN:-$PREFIX-$(date -u +%Y%m%dT%H%M%SZ)}-$label"
+    meta=$(jq -cn --arg r "${RUN:-}" --arg c "$label" --arg g "$PREFIX-${KEY:-closed}" --arg n "${NOTE:-}" \
+      '{_user: "aigw-byo-guardrail-e2e", run: $r, case: $c, guardrail: $g, note: $n} | with_entries(select(.value != ""))')
+    body=$(mktemp); hdr=$(mktemp); trap 'rm -f "$body" "$hdr"' EXIT
+    code=$(curl -s -m 60 -o "$body" -D "$hdr" -w '%{http_code}' "$GW_URL/v1/messages" \
       -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+      -H "x-portkey-trace-id: $trace" -H "x-portkey-metadata: $meta" \
       -H @<(printf 'x-portkey-api-key: %s\nauthorization: Bearer %s\n' "$(jq -r .key "$keyfile")" "${BEARER:-dummy-client-bearer}") \
       "$@" -d '{"model":"claude-haiku-4-5","max_tokens":10,"messages":[{"role":"user","content":"Reply with one word: ok"}]}') || code=000
-    if [ -n "${OUT:-}" ]; then mkdir -p "$OUT"; redact < "$body" > "$OUT/$label.json"; fi
+    got=$(tr -d '\r' < "$hdr" | awk -F': ' 'tolower($1)=="x-portkey-trace-id"{v=$2} END{print v}')
+    if [ -n "${OUT:-}" ]; then mkdir -p "$OUT"; redact < "$body" > "$OUT/$label.json"; tr -d '\r' < "$hdr" | redact > "$OUT/$label.headers"; fi
     summary=$(jq -r '[(.hook_results.before_request_hooks // [] | map(.verdict | tostring) | join(",")),
         ((.hook_results.before_request_hooks // [])[0].checks[0] | (.data.responseData.reason? // .data.explanation? // .error.message? // ""))] | @tsv' \
       "$body" 2>/dev/null || printf '\t%s' "$(head -c 160 "$body" | tr -d '\n')")
-    printf '%s\t%s\t%s\t%s\n' "$label" "${KEY:-closed}" "$code" "$summary" | redact ;;
+    printf '%s\t%s\t%s\t%s\t%s\n' "$label" "${KEY:-closed}" "$code" "$summary" "${got:-sent:$trace}" | redact ;;
   policy)
     case ${2:?file or reset} in
       reset) rm -f infra/probe.auto.tfvars ;;
@@ -90,5 +98,5 @@ case ${1:-} in
       "${GW[@]}" guardrails delete "$(jq -r .guardrail "$f")" --force >/dev/null && echo "deleted guardrail $PREFIX-$mode"
       shred -u "$STATE/$mode.key" 2>/dev/null || rm -f "$STATE/$mode.key"; rm -f "$f"
     done ;;
-  *) sed -n '2,19p' "$0"; exit 1 ;;
+  *) sed -n '2,21p' "$0"; exit 1 ;;
 esac

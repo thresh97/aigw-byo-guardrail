@@ -20,7 +20,7 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 |---|---|
 | `webhook/handler.py` | The Lambda (Python stdlib only). It reads the policy from env `POLICY`, authenticates the gateway with a shared token in `x-guardrail-token`, and logs the headers it received (auth values redacted) to CloudWatch |
 | `infra/` | Terraform for the Lambda, its Function URL, IAM, the log group and the token |
-| `tests/` | `python3 -m unittest tests/test_handler.py` |
+| `tests/` | `python3 -m unittest tests/test_handler.py`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |
 
 Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a
 tenant selected (`airs-cli doctor` all green), `jq`, `curl`.
