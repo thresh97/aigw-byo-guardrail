@@ -3,14 +3,16 @@ id: aigw-byo-guardrail
 title: Bring-your-own webhook guardrail for the AI Gateway (client IP and header rules on AWS Lambda)
 area: aigw
 type: guide            # guide | behavior | capability | limitation | workaround | position
-status: reported          # verified | reported | stale | superseded | retracted
+status: verified          # verified | reported | stale | superseded | retracted
 visibility: public        # internal | public
-verified:                 # YYYY-MM-DD: date of the newest private evidence folder; empty if never tested
-versions: {}              # component: version, as confirmed by that evidence
-source: Lab run against a SaaS gateway on 2026-09-30 (webhook CloudWatch logs); run output wasn't kept, re-test pending   # required when status is reported: where the claim came from
+verified: 2026-10-12      # YYYY-MM-DD: date of the newest private evidence folder; empty if never tested
+versions:                 # component: version, as confirmed by that evidence
+  aigw-saas: as of 2026-10-09 (no version exposed)
+  aigw-image: 2.27.0
+  aigw-chart: airs-gw-1.2.0
 related: []               # other article IDs
 supersedes: []
 superseded_by:
-tags: [guardrail, webhook, byo-guardrail, lambda, terraform, client-ip, headers, saas]
+tags: [guardrail, webhook, byo-guardrail, lambda, terraform, client-ip, headers, saas, hybrid]
 ---
 Metadata for this article, read by `kb`, Obsidian Dataview and agents. The content is in [README.md](README.md).

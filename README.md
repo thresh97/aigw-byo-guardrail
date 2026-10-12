@@ -95,7 +95,7 @@ ask() {  # ask [extra curl args...] -> HTTP status + start of body
 }
 ask                                                    # 200 from an allowed egress IP
 ask -H 'x-app: probe-blockme'                          # 446 (header deny rule)
-ask -H 'x-forwarded-for: 192.0.2.10'                   # no effect: the webhook only trusts cf-connecting-ip
+ask -H 'x-forwarded-for: 192.0.2.10'                   # no effect on SaaS: the webhook only trusts cf-connecting-ip (hybrid: see Findings)
 ask -H 'cf-connecting-ip: 192.0.2.10'                  # 403 "error code: 1000": the edge rejects it
 ```
 
@@ -122,27 +122,62 @@ rm -f gateway-key.json
 terraform -chdir=infra destroy
 ```
 
-## Findings (SaaS gateway, 2026-09-30)
+## Findings
 
-What the webhook actually receives when the client sends each header (taken from the webhook's CloudWatch logs):
+Tested 2026-09-30 and again 2026-10-09 on the SaaS gateway (no version exposed), and on 2026-10-12 on a hybrid gateway
+(image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed by `infra/`.
+`tests/e2e.sh` runs the same cases against either.
 
-| Client sends | Reaches webhook as | Trust |
-|---|---|---|
-| nothing | `cf-connecting-ip` = client egress IP, set by the Cloudflare edge (the gateway runs as a Worker; there's a `cf-worker` header) | ✅ |
-| spoofed `cf-connecting-ip` | request rejected at the edge: HTTP 403 `error code: 1000` | ✅ unforgeable |
-| spoofed `x-forwarded-for` / `true-client-ip` | forwarded unchanged | ❌ client-controlled |
-| `x-real-ip` | not forwarded (dropped) | n/a |
-| custom header (`x-app`) | forwarded unchanged | client-controlled; fine for deny rules on cooperative clients |
+### Both gateways
 
+- Allow and deny CIDR rules and header rules behave as described: 200 when allowed, 446 when blocked.
+- On a block, the gateway's `explanation` says "Webhook request failed" even though the webhook returned 200 with `verdict:false`.
+  The real reason is in `responseData`.
+- **`failOnError: true` fails closed**: when the webhook errors (tested with HTTP 429), the request gets a 446. With
+  `failOnError: false` it goes through and **no rule runs at all, header rules included**. A webhook *timeout*, as opposed to
+  an error, hasn't been tested.
 - The default payload has `requestType` (`messages`), `provider` (`anthropic`), `metadata` (from `x-portkey-metadata`) and the
   request body. It has no client IP unless you list the header in `forwardHeaders`.
 - An egress IP can rotate within a NAT pool from one request to the next. Allowlist the whole range.
-- On a block, the gateway's `explanation` says "Webhook request failed" even though the webhook returned 200 with `verdict:false`.
-  The real reason is in `responseData`.
-- Without `failOnError: true`, a webhook timeout or error counts as `verdict: true`, so the request goes through. With it, the guardrail
-  should fail closed. That case hasn't been tested yet.
-- `cf-connecting-ip` exists only on the SaaS gateway. On a hybrid or self-hosted gateway, use an IP header set by your own load
-  balancer and make sure clients can't set it.
+
+### SaaS gateway
+
+What the webhook receives when the client sends each header (from the webhook's CloudWatch logs):
+
+| Client sends | Reaches webhook as | Trust |
+|---|---|---|
+| nothing | `cf-connecting-ip` = client egress IP, set by the Cloudflare edge (the gateway runs as a Worker; there's a `cf-worker` header). `x-forwarded-for` = the same IP | ✅ (`cf-connecting-ip`) |
+| spoofed `cf-connecting-ip` | request rejected at the edge: HTTP 403 `error code: 1000` | ✅ unforgeable |
+| spoofed `x-forwarded-for` | the client's value **replaces** the edge's, it isn't appended to | ❌ client-controlled |
+| spoofed `true-client-ip` | forwarded unchanged | ❌ client-controlled |
+| `x-real-ip` | not forwarded (dropped) | n/a |
+| custom header (`x-app`) | forwarded unchanged | client-controlled; fine for deny rules on cooperative clients |
+
+Use `ip_headers = ["cf-connecting-ip"]` on SaaS.
+
+### Hybrid gateway behind an ALB
+
+What the webhook receives (the ALB in its default `append` XFF mode, the webhook on a Lambda Function URL):
+
+| Client sends | Reaches webhook as | Trust |
+|---|---|---|
+| nothing | `x-forwarded-for` = client IP (set by the ALB) | ✅ only while the client sends none |
+| spoofed `x-forwarded-for` | **only the client's value**: the ALB appends the real IP, but the Function URL keeps just the leftmost entry | ❌ client-controlled |
+| spoofed `cf-connecting-ip` / `true-client-ip` / `x-real-ip` | forwarded unchanged | ❌ client-controlled |
+
+- The Lambda Function URL itself keeps only the leftmost `x-forwarded-for` entry: a direct request with
+  `x-forwarded-for: 192.0.2.10, 198.51.100.7` reaches the handler as `192.0.2.10`. So no handler logic can recover the
+  load balancer's entry.
+- In practice, with `ip_headers = ["x-forwarded-for"]`, a client **bypasses a deny rule** and **passes an allowlist** by sending
+  `x-forwarded-for: <an allowed IP>`.
+- **IP rules in this example aren't safe on a hybrid gateway as deployed.** Options:
+  - Enforce client IPs at your own load balancer instead (ALB security group or listener rules, WAF); the gateway sits behind it anyway.
+  - Overwrite the client IP header in a proxy you run in front of the gateway (set it to the peer address, drop the
+    client's value), so whatever reaches the webhook was set by you. An ALB alone can't: its XFF modes are append,
+    preserve and remove, and with `remove` the Function URL fills in the gateway's own egress IP. Not tested here.
+  - Put the webhook behind a front end that keeps the full XFF chain (API Gateway, an ALB, a container) and read the entry
+    your trusted hop added (counting from the right). Not tested here.
+- Header rules are unaffected by this and work as on SaaS.
 
 ## License
 
