@@ -15,7 +15,7 @@
 # UPSTREAM_HOST (optional: an Anthropic-compatible mock as custom_host; otherwise Anthropic itself, with the client's bearer),
 # BEARER (client bearer for the provider; default a dummy, fine with a mock), MOCK_LOG_GROUP (optional, for `logs`),
 # FUNCTION_NAME (for down/up, default aigw-byo-guardrail),
-# STATE (where ids and key secrets go, default ~/.local/state/aigw-byo-guardrail; never commit or copy it).
+# MODES (default "closed open"), STATE (where ids and key secrets go, default ~/.local/state/aigw-byo-guardrail; never commit or copy it).
 set -euo pipefail
 PREFIX=${PREFIX:-byo-probe}
 STATE=${STATE:-$HOME/.local/state/aigw-byo-guardrail}
@@ -39,7 +39,7 @@ case ${1:-} in
     URL=$("${TF[@]}" output -raw webhook_url)
     ACTIONS='{"deny":true,"async":false,"on_success":{"feedback":{"value":1,"weight":1,"metadata":""}},
       "on_fail":{"feedback":{"value":-1,"weight":1,"metadata":""}}}'
-    for mode in closed open; do
+    for mode in ${MODES:-closed open}; do
       fail=$([ $mode = closed ] && echo true || echo false)
       CHECKS=$(jq -cn --arg u "$URL" --arg t "$("${TF[@]}" output -raw webhook_token)" --arg f "$FORWARD_HEADERS" --argjson e "$fail" \
         '[{id: "default.webhook", parameters: {webhookURL: $u, headers: {"x-guardrail-token": $t},
@@ -83,7 +83,7 @@ case ${1:-} in
     aws logs tail "$("${TF[@]}" output -raw log_group)" --since "$since" --format short | redact
     [ -n "${MOCK_LOG_GROUP:-}" ] && { echo "--- mock"; aws logs tail "$MOCK_LOG_GROUP" --since "$since" --format short | redact; } || true ;;
   teardown)
-    for mode in closed open; do
+    for mode in ${MODES:-closed open}; do
       f=$STATE/$mode.ids; [ -f "$f" ] || continue
       "${GW[@]}" api-keys service delete "$(jq -r .key "$f")" --force >/dev/null && echo "deleted key $PREFIX-$mode"
       "${GW[@]}" configs delete "$(jq -r .config "$f")" --force >/dev/null && echo "deleted config $PREFIX-$mode"
