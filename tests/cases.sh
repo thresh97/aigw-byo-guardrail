@@ -5,7 +5,8 @@
 #
 # Env: everything e2e.sh needs (GW_URL, OUT, ...), plus
 # CLIENT_IP (this client's egress IP as the gateway sees it), IP_HEADER (the one header the policy reads:
-# cf-connecting-ip on SaaS, x-forwarded-for behind a load balancer), SPOOF_IP (default 192.0.2.10),
+# cf-connecting-ip on SaaS, x-forwarded-for behind a load balancer), CLIENT_CIDR (what the policies allow or deny,
+# default CLIENT_IP/32; use the NAT pool's range if egress rotates), SPOOF_IP (default 192.0.2.10),
 # RUN (readable run name for the trace ids, default <PREFIX>-<UTC time>),
 # CTL_SSH (optional ssh host: run policy/down/up there, in ~/aigw-byo-guardrail, when terraform and the webhook's
 # AWS access live on another host than the gateway client; the policy file goes over stdin).
@@ -13,7 +14,7 @@
 # `down` restores the base policy, and the caller runs `e2e.sh policy reset` at the end.
 set -uo pipefail
 : "${CLIENT_IP:?set CLIENT_IP}" "${IP_HEADER:?set IP_HEADER}" "${OUT:?set OUT}"
-SPOOF_IP=${SPOOF_IP:-192.0.2.10}
+SPOOF_IP=${SPOOF_IP:-192.0.2.10} CLIENT_CIDR=${CLIENT_CIDR:-$CLIENT_IP/32}
 export RUN=${RUN:-${PREFIX:-byo-probe}-$(date -u +%Y%m%dT%H%M%SZ)}
 E=(bash tests/e2e.sh)
 ctl() {  # ctl <e2e.sh args>: locally, or on $CTL_SSH; stdin is passed through
@@ -39,7 +40,7 @@ ask() {  # ask <closed|open> <label> <note> [curl args]
 }
 
 base() {
-  policy base "\"$CLIENT_IP/32\"" ""
+  policy base "\"$CLIENT_CIDR\"" ""
   ask closed allowed "client IP allowed; expect 200"
   ask closed header-deny "x-app deny rule; expect 446" -H 'x-app: probe-blockme'
   ask closed header-other "other x-app value; expect 200" -H 'x-app: probe-ok'
@@ -51,7 +52,7 @@ base() {
   ask open open-header-deny "failOnError false, x-app deny rule; expect 446" -H 'x-app: probe-blockme'
 }
 deny() {
-  policy deny "\"$CLIENT_IP/32\", \"${SPOOF_IP%.*}.0/24\"" "\"$CLIENT_IP/32\""
+  policy deny "\"$CLIENT_CIDR\", \"${SPOOF_IP%.*}.0/24\"" "\"$CLIENT_CIDR\""
   ask closed deny "client IP in deny_cidrs; expect 446"
   ask open open-deny "failOnError false, client IP in deny_cidrs; expect 446"
   ask closed deny-spoof "client IP denied, spoofed $IP_HEADER $SPOOF_IP (allowed); 200 = bypass" -H "$IP_HEADER: $SPOOF_IP"
@@ -62,7 +63,7 @@ notallowed() {
   ask closed notallowed-spoof "spoofed $IP_HEADER $SPOOF_IP (allowed); 200 = allowlist passed" -H "$IP_HEADER: $SPOOF_IP"
 }
 down() {
-  policy base "\"$CLIENT_IP/32\"" ""
+  policy base "\"$CLIENT_CIDR\"" ""
   ctl bash tests/e2e.sh down >&2; sleep 5
   ask closed down "webhook down (429), failOnError true; expect 446"
   ask open open-down "webhook down (429), failOnError false; expect 200"
