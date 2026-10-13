@@ -1,13 +1,8 @@
 # aigw-byo-guardrail
 
-A bring-your-own guardrail for the Prisma AIRS / Portkey AI Gateway
-([webhook guardrail docs](https://portkey.ai/docs/integrations/guardrails/bring-your-own-guardrails)).
-It blocks LLM requests based on request metadata the built-in guardrails can't match: the client IP
-(CIDR allow and deny lists) and arbitrary request headers (regex require or deny rules).
+A bring-your-own guardrail for the Prisma AIRS / Portkey AI Gateway ([webhook guardrail docs](https://portkey.ai/docs/integrations/guardrails/bring-your-own-guardrails)). It blocks LLM requests based on request metadata the built-in guardrails can't match: the client IP (CIDR allow and deny lists) and arbitrary request headers (regex require or deny rules).
 
-> **Disclaimer:** This is a simple, art-of-the-possible example of a bring-your-own guardrail. It is **not** an official
-> Palo Alto Networks or Portkey project, it is **not** a recommended or supported production design, and it comes with
-> **no support**. Use it at your own risk, under the [MIT License](LICENSE).
+> **Disclaimer:** This is a simple, art-of-the-possible example of a bring-your-own guardrail. It is **not** an official Palo Alto Networks or Portkey project, it is **not** a recommended or supported production design, and it comes with **no support**. Use it at your own risk, under the [MIT License](LICENSE).
 
 ```
 client ──► AI Gateway (SaaS) ──► LLM provider
@@ -23,8 +18,7 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 | `webhook/server.py`, `k8s/webhook.sh` | The same handler as a plain HTTP server, deployed to Kubernetes (stock python image, code in a ConfigMap). Unlike a Function URL it passes the full `x-forwarded-for` chain through (see Findings, hybrid) |
 | `tests/` | `python3 -m unittest tests/test_handler.py`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |
 
-Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a
-tenant selected (`airs-cli doctor` all green), `jq`, `curl`.
+Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a tenant selected (`airs-cli doctor` all green), `jq`, `curl`.
 
 ## 1. Deploy the webhook
 
@@ -80,8 +74,7 @@ CFG_ID=$(airs-cli --quiet aigateway configs create --workspace "$WS_ID" --name b
 KEY_ID=$(jq -r .id gateway-key.json)
 ```
 
-Two gotchas: `airs-cli` rejects `actions` unless every `feedback` object has a `metadata` field. And any header you want to
-match has to be listed in `forwardHeaders`. The default payload has no client headers.
+Two gotchas: `airs-cli` rejects `actions` unless every `feedback` object has a `metadata` field. And any header you want to match has to be listed in `forwardHeaders`. The default payload has no client headers.
 
 ## 3. Test (curl)
 
@@ -107,11 +100,9 @@ ask -H 'x-app: probe-blockme' >/dev/null   # or capture the full body and:
 # jq '.hook_results.before_request_hooks[0].checks[0].data.responseData'   ->  {"reason": "x-app matches deny 'blockme'"}
 ```
 
-To prove IP enforcement from an allowed network, add your own egress range to `deny_cidrs`, `apply`, and re-run `ask`.
-Every request gets a 446 with `cf-connecting-ip=<your ip> in deny_cidrs`. Remove the range and `apply` again.
+To prove IP enforcement from an allowed network, add your own egress range to `deny_cidrs`, `apply`, and re-run `ask`. Every request gets a 446 with `cf-connecting-ip=<your ip> in deny_cidrs`. Remove the range and `apply` again.
 
-The webhook's CloudWatch log group (`terraform -chdir=infra output -raw log_group`) records every verdict and the header names
-it received. That's the quickest way to see what the gateway actually forwards.
+The webhook's CloudWatch log group (`terraform -chdir=infra output -raw log_group`) records every verdict and the header names it received. That's the quickest way to see what the gateway actually forwards.
 
 ## 4. Teardown
 
@@ -125,23 +116,16 @@ terraform -chdir=infra destroy
 
 ## Findings
 
-Tested 2026-10-09 and 2026-10-12 on the SaaS gateway (no version exposed), and 2026-10-12 and 2026-10-13 on a hybrid
-gateway (image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed
-by `infra/`. `tests/cases.sh` runs the same cases against either.
+Tested 2026-10-09 and 2026-10-12 on the SaaS gateway (no version exposed), and 2026-10-12 and 2026-10-13 on a hybrid gateway (image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed by `infra/`. `tests/cases.sh` runs the same cases against either.
 
 ### Both gateways
 
 - Allow and deny CIDR rules and header rules behave as described: 200 when allowed, 446 when blocked.
-- On a block, the gateway's `explanation` says "Webhook request failed" even though the webhook returned 200 with `verdict:false`.
-  The real reason is in `responseData`.
-- **`failOnError: true` fails closed**: when the webhook errors (tested with HTTP 429), the request gets a 446. With
-  `failOnError: false` it goes through and **no rule runs at all, header rules included**. A webhook *timeout*, as opposed to
-  an error, hasn't been tested.
-- The default payload has `requestType` (`messages`), `provider` (`anthropic`), `metadata` (from `x-portkey-metadata`) and the
-  request body. It has no client IP unless you list the header in `forwardHeaders`.
+- On a block, the gateway's `explanation` says "Webhook request failed" even though the webhook returned 200 with `verdict:false`. The real reason is in `responseData`.
+- **`failOnError: true` fails closed**: when the webhook errors (tested with HTTP 429), the request gets a 446. With `failOnError: false` it goes through and **no rule runs at all, header rules included**. A webhook *timeout*, as opposed to an error, hasn't been tested.
+- The default payload has `requestType` (`messages`), `provider` (`anthropic`), `metadata` (from `x-portkey-metadata`) and the request body. It has no client IP unless you list the header in `forwardHeaders`.
 - An egress IP can rotate within a NAT pool from one request to the next. Allowlist the whole range.
-- A client `x-portkey-trace-id` comes back unchanged in the response headers, and `x-portkey-metadata` reaches the
-  webhook payload's `metadata` as sent. The trace id itself isn't in the webhook payload or headers. Both are client-supplied.
+- A client `x-portkey-trace-id` comes back unchanged in the response headers, and `x-portkey-metadata` reaches the webhook payload's `metadata` as sent. The trace id itself isn't in the webhook payload or headers. Both are client-supplied.
 
 ### SaaS gateway
 
@@ -168,23 +152,13 @@ What the webhook receives (the ALB in its default `append` XFF mode, the webhook
 | spoofed `x-forwarded-for` | **only the client's value**: the ALB appends the real IP, but the Function URL keeps just the leftmost entry | ❌ client-controlled |
 | spoofed `cf-connecting-ip` / `true-client-ip` / `x-real-ip` | forwarded unchanged | ❌ client-controlled |
 
-- The Lambda Function URL itself keeps only the leftmost `x-forwarded-for` entry: a direct request with
-  `x-forwarded-for: 192.0.2.10, 198.51.100.7` reaches the handler as `192.0.2.10`. So no handler logic can recover the load balancer's entry.
-- In practice, with `ip_headers = ["x-forwarded-for"]`, a client **bypasses a deny rule** and **passes an allowlist** by sending
-  `x-forwarded-for: <an allowed IP>`.
+- The Lambda Function URL itself keeps only the leftmost `x-forwarded-for` entry: a direct request with `x-forwarded-for: 192.0.2.10, 198.51.100.7` reaches the handler as `192.0.2.10`. So no handler logic can recover the load balancer's entry.
+- In practice, with `ip_headers = ["x-forwarded-for"]`, a client **bypasses a deny rule** and **passes an allowlist** by sending `x-forwarded-for: <an allowed IP>`.
 - **IP rules in this example aren't safe on a hybrid gateway as deployed.** Options:
   - Enforce client IPs at your own load balancer instead (ALB security group or listener rules, WAF); the gateway sits behind it anyway.
-  - Overwrite the client IP header in a proxy you run in front of the gateway (set it to the peer address, drop the
-    client's value), so whatever reaches the webhook was set by you. An ALB alone can't: its XFF modes are append,
-    preserve and remove, and with `remove` the Function URL fills in the gateway's own egress IP. Not tested here.
-  - Put the webhook behind a front end that keeps the full XFF chain and set `trusted_hops` to the number of proxies you
-    trust (1 for a single ALB), so the handler reads the entry they added, counting from the right. `webhook/server.py`
-    (deployed by `k8s/webhook.sh`) keeps the chain. Not yet tested through a gateway: see the next bullet.
-- The hybrid gateway refuses an in-cluster webhook URL `http://<svc>.<gateway-ns>.svc.cluster.local/` with
-  `Webhook error: webhookURL rejected by SSRF policy`, even with `*.<gateway-ns>.svc.cluster.local` in `TRUSTED_CUSTOM_HOSTS`.
-  It never calls the webhook (446 with `failOnError: true`, 200 with no rule run with `false`). Use `<svc>.<ns>.svc` with a
-  matching `TRUSTED_CUSTOM_HOSTS` entry instead (untested for webhooks; it's the form that works for custom LLM hosts). Private-host
-  behaviour in general: article `aigw-private-hosts`.
+  - Overwrite the client IP header in a proxy you run in front of the gateway (set it to the peer address, drop the client's value), so whatever reaches the webhook was set by you. An ALB alone can't: its XFF modes are append, preserve and remove, and with `remove` the Function URL fills in the gateway's own egress IP. Not tested here.
+  - Put the webhook behind a front end that keeps the full XFF chain and set `trusted_hops` to the number of proxies you trust (1 for a single ALB), so the handler reads the entry they added, counting from the right. `webhook/server.py` (deployed by `k8s/webhook.sh`) keeps the chain. Not yet tested through a gateway: see the next bullet.
+- The hybrid gateway refuses an in-cluster webhook URL `http://<svc>.<gateway-ns>.svc.cluster.local/` with `Webhook error: webhookURL rejected by SSRF policy`, even with `*.<gateway-ns>.svc.cluster.local` in `TRUSTED_CUSTOM_HOSTS`. It never calls the webhook (446 with `failOnError: true`, 200 with no rule run with `false`). Use `<svc>.<ns>.svc` with a matching `TRUSTED_CUSTOM_HOSTS` entry instead (untested for webhooks; it's the form that works for custom LLM hosts). Private-host behaviour in general: article `aigw-private-hosts`.
 - Header rules are unaffected by this and work as on SaaS.
 
 ## License
