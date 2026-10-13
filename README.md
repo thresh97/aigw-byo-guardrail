@@ -20,6 +20,7 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 |---|---|
 | `webhook/handler.py` | The Lambda (Python stdlib only). It reads the policy from env `POLICY`, authenticates the gateway with a shared token in `x-guardrail-token`, and logs the headers it received (auth values redacted) to CloudWatch |
 | `infra/` | Terraform for the Lambda, its Function URL, IAM, the log group and the token |
+| `webhook/server.py`, `k8s/webhook.sh` | The same handler as a plain HTTP server, deployed to Kubernetes (stock python image, code in a ConfigMap). Unlike a Function URL it passes the full `x-forwarded-for` chain through (see Findings, hybrid) |
 | `tests/` | `python3 -m unittest tests/test_handler.py`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |
 
 Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a
@@ -166,8 +167,7 @@ What the webhook receives (the ALB in its default `append` XFF mode, the webhook
 | spoofed `cf-connecting-ip` / `true-client-ip` / `x-real-ip` | forwarded unchanged | ❌ client-controlled |
 
 - The Lambda Function URL itself keeps only the leftmost `x-forwarded-for` entry: a direct request with
-  `x-forwarded-for: 192.0.2.10, 198.51.100.7` reaches the handler as `192.0.2.10`. So no handler logic can recover the
-  load balancer's entry.
+  `x-forwarded-for: 192.0.2.10, 198.51.100.7` reaches the handler as `192.0.2.10`. So no handler logic can recover the load balancer's entry.
 - In practice, with `ip_headers = ["x-forwarded-for"]`, a client **bypasses a deny rule** and **passes an allowlist** by sending
   `x-forwarded-for: <an allowed IP>`.
 - **IP rules in this example aren't safe on a hybrid gateway as deployed.** Options:

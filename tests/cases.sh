@@ -7,6 +7,7 @@
 # CLIENT_IP (this client's egress IP as the gateway sees it), IP_HEADER (the one header the policy reads:
 # cf-connecting-ip on SaaS, x-forwarded-for behind a load balancer), CLIENT_CIDR (what the policies allow or deny,
 # default CLIENT_IP/32; use the NAT pool's range if egress rotates), SPOOF_IP (default 192.0.2.10),
+# TRUSTED_HOPS (the policy's trusted_hops, default 0; see webhook/handler.py),
 # RUN (readable run name for the trace ids, default <PREFIX>-<UTC time>),
 # CTL_SSH (optional ssh host: run policy/down/up there, in ~/aigw-byo-guardrail, when terraform and the webhook's
 # AWS access live on another host than the gateway client; the policy file goes over stdin).
@@ -27,6 +28,7 @@ policy() {  # policy <step> <allow list> <deny list>: write and apply a test pol
 # cases.sh $1 ($RUN)
 policy = {
   ip_headers   = ["$IP_HEADER"]
+  trusted_hops = ${TRUSTED_HOPS:-0}
   allow_cidrs  = [$2]
   deny_cidrs   = [$3]
   header_rules = [{ header = "x-app", deny = "blockme" }]

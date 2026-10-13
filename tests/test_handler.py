@@ -55,5 +55,29 @@ class Handler(unittest.TestCase):
         self.assertFalse(call({**OK, "x-dept": "sales"})[1]["verdict"])
 
 
+class TrustedHops(unittest.TestCase):
+    def ip(self, xff, hops):
+        p = handler.load_policy(json.dumps({"ip_headers": ["x-forwarded-for"], "trusted_hops": hops}))
+        return handler.client_ip({"x-forwarded-for": xff}, p["ip_headers"], p["trusted_hops"])[1]
+
+    def test_leftmost_by_default(self):
+        self.assertEqual(str(self.ip("192.0.2.10, 198.51.100.7", 0)), "192.0.2.10")
+
+    def test_from_the_right(self):
+        self.assertEqual(str(self.ip("192.0.2.10, 198.51.100.7", 1)), "198.51.100.7")
+        self.assertEqual(str(self.ip("192.0.2.10, 198.51.100.7, 203.0.113.9", 2)), "198.51.100.7")
+
+    def test_too_short_fails_closed(self):
+        self.assertIsNone(self.ip("198.51.100.7", 2))
+        p = handler.load_policy(json.dumps({"ip_headers": ["x-forwarded-for"], "trusted_hops": 2,
+                                            "allow_cidrs": ["198.51.100.0/24"]}))
+        self.assertFalse(handler.evaluate({"x-forwarded-for": "198.51.100.7"}, p)[0])
+
+    def test_spoofed_left_entry_ignored(self):
+        p = handler.load_policy(json.dumps({"ip_headers": ["x-forwarded-for"], "trusted_hops": 1,
+                                            "deny_cidrs": ["198.51.100.7/32"]}))
+        self.assertFalse(handler.evaluate({"x-forwarded-for": "192.0.2.10, 198.51.100.7"}, p)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
-"""Portkey / Prisma AIRS AI Gateway webhook guardrail (default.webhook), on a Lambda Function URL.
+"""Portkey / Prisma AIRS AI Gateway webhook guardrail (default.webhook), on a Lambda Function URL or any
+HTTP host (server.py wraps it for Kubernetes and docker).
 
 The gateway POSTs {request, response, metadata, provider, requestType, eventType} and sends the
 client headers listed in the guardrail's forwardHeaders. We answer {"verdict": bool}; false blocks
@@ -6,6 +7,11 @@ the request when the guardrail's deny action is on.
 
 Policy (env POLICY, JSON):
   ip_headers    header names to read the client IP from, first present wins
+  trusted_hops  0 (default): take the leftmost entry of a comma list. Only safe for a header a trusted edge sets
+                whole (cf-connecting-ip on SaaS). N: take the Nth entry from the right, i.e. the one your Nth
+                trusted proxy appended (x-forwarded-for behind a load balancer in append mode: 1). A shorter
+                list has no trustworthy entry and fails closed. A Lambda Function URL keeps only the leftmost
+                x-forwarded-for entry, so N > 0 needs a host that passes the header through (server.py).
   allow_cidrs   if non-empty, the client IP must be inside one of these
   deny_cidrs    the client IP must not be inside any of these
   header_rules  [{"header": name, "require": regex} | {"header": name, "deny": regex}]
@@ -33,6 +39,7 @@ def load_policy(raw):
     p = json.loads(raw or "{}")
     return {
         "ip_headers": [h.lower() for h in p.get("ip_headers", ["cf-connecting-ip"])],
+        "trusted_hops": int(p.get("trusted_hops") or 0),
         "allow_cidrs": [ipaddress.ip_network(c, strict=False) for c in p.get("allow_cidrs", [])],
         "deny_cidrs": [ipaddress.ip_network(c, strict=False) for c in p.get("deny_cidrs", [])],
         "header_rules": [
@@ -42,14 +49,17 @@ def load_policy(raw):
     }
 
 
-def client_ip(headers, ip_headers):
-    """Return (header, ip) for the first ip header that holds a parseable address."""
+def client_ip(headers, ip_headers, trusted_hops=0):
+    """Return (header, ip) for the first ip header that holds a parseable address at the trusted position."""
     for h in ip_headers:
         v = headers.get(h)
         if not v:
             continue
+        entries = [e.strip() for e in v.split(",")]
+        if trusted_hops and len(entries) < trusted_hops:
+            continue
         try:
-            return h, ipaddress.ip_address(v.split(",")[0].strip())
+            return h, ipaddress.ip_address(entries[-trusted_hops] if trusted_hops else entries[0])
         except ValueError:
             continue
     return None, None
@@ -58,7 +68,7 @@ def client_ip(headers, ip_headers):
 def evaluate(headers, policy):
     """Return (verdict, reason). headers must have lowercase names."""
     if policy["allow_cidrs"] or policy["deny_cidrs"]:
-        src, ip = client_ip(headers, policy["ip_headers"])
+        src, ip = client_ip(headers, policy["ip_headers"], policy["trusted_hops"])
         if ip is None:
             return False, f"no client ip in {policy['ip_headers']}"
         if any(ip in n for n in policy["deny_cidrs"]):

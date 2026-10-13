@@ -6,7 +6,7 @@
 #   bash tests/e2e.sh policy <file.tfvars>       # apply a test policy (copied to infra/probe.auto.tfvars, gitignored)
 #   bash tests/e2e.sh policy reset               # remove the test policy and apply again
 #   bash tests/e2e.sh down | up                  # webhook unreachable (Lambda reserved concurrency 0) | reachable again
-#   bash tests/e2e.sh logs <since>               # webhook (and mock) CloudWatch lines since e.g. 30m, secrets redacted
+#   bash tests/e2e.sh logs <since>               # webhook (and mock) lines since e.g. 30m, secrets redacted (k8s: since deploy)
 #   bash tests/e2e.sh teardown                   # delete what `wire` created
 #
 # Env: GW_URL (gateway base URL, e.g. https://aigw.portkey.ai), WS_ID (workspace UUID), TSG (tenant TSG ID),
@@ -17,18 +17,23 @@
 # UPSTREAM_HOST (optional: an Anthropic-compatible mock as custom_host; otherwise Anthropic itself, with the client's bearer),
 # BEARER (client bearer for the provider; default a dummy, fine with a mock), MOCK_LOG_GROUP (optional, for `logs`),
 # FUNCTION_NAME (for down/up, default aigw-byo-guardrail),
+# TARGET (lambda, default: the infra/ deployment | k8s: k8s/webhook.sh with its env, NAME, K8S_NAMESPACE, KUBE_CONTEXT),
 # MODES (default "closed open"), STATE (where ids and key secrets go, default ~/.local/state/aigw-byo-guardrail; never commit or copy it).
 set -euo pipefail
 PREFIX=${PREFIX:-byo-probe}
 STATE=${STATE:-$HOME/.local/state/aigw-byo-guardrail}
 FORWARD_HEADERS=${FORWARD_HEADERS:-cf-connecting-ip,x-forwarded-for,x-real-ip,true-client-ip,forwarded,x-envoy-external-address,x-app}
 TF=(terraform -chdir=infra)
+WH=(bash k8s/webhook.sh)
+wh() {  # wh url|token: the webhook's address and token for the selected TARGET
+  if [ "${TARGET:-lambda}" = k8s ]; then "${WH[@]}" "$1"; else "${TF[@]}" output -raw "webhook_$1"; fi
+}
 GW=(airs-cli --quiet aigateway)
 mkdir -p "$STATE" && chmod 700 "$STATE"
 
 redact() {  # replace every secret this run knows about with <redacted>
   local s args=()
-  for s in "$("${TF[@]}" output -raw webhook_token 2>/dev/null)" "${UPSTREAM_HOST:-}" "${BEARER:-}" \
+  for s in "$(wh token 2>/dev/null)" "${UPSTREAM_HOST:-}" "${BEARER:-}" \
            $(cat "$STATE"/*.key 2>/dev/null | jq -r '.key // empty' 2>/dev/null); do
     [ -n "$s" ] && [ ${#s} -ge 8 ] && args+=(-e "s|$(printf '%s' "$s" | sed 's/[][\.*^$|/]/\\&/g')|<redacted>|g")
   done
@@ -38,12 +43,12 @@ redact() {  # replace every secret this run knows about with <redacted>
 case ${1:-} in
   wire)
     : "${WS_ID:?set WS_ID}"; : "${TSG:?set TSG}"
-    URL=$("${TF[@]}" output -raw webhook_url)
+    URL=$(wh url)
     ACTIONS='{"deny":true,"async":false,"on_success":{"feedback":{"value":1,"weight":1,"metadata":""}},
       "on_fail":{"feedback":{"value":-1,"weight":1,"metadata":""}}}'
     for mode in ${MODES:-closed open}; do
       fail=$([ $mode = closed ] && echo true || echo false)
-      CHECKS=$(jq -cn --arg u "$URL" --arg t "$("${TF[@]}" output -raw webhook_token)" --arg f "$FORWARD_HEADERS" --argjson e "$fail" \
+      CHECKS=$(jq -cn --arg u "$URL" --arg t "$(wh token)" --arg f "$FORWARD_HEADERS" --argjson e "$fail" \
         '[{id: "default.webhook", parameters: {webhookURL: $u, headers: {"x-guardrail-token": $t},
            forwardHeaders: ($f | split(",")), timeout: 3000, failOnError: $e}}]')
       GR=$("${GW[@]}" guardrails create --workspace "$WS_ID" --name "$PREFIX-$mode" --checks "$CHECKS" --actions "$ACTIONS" --output json)
@@ -78,17 +83,21 @@ case ${1:-} in
       "$body" 2>/dev/null || printf '\t%s' "$(head -c 160 "$body" | tr -d '\n')")
     printf '%s\t%s\t%s\t%s\t%s\n' "$label" "${KEY:-closed}" "$code" "$summary" "${got:-sent:$trace}" | redact ;;
   policy)
+    [ "${TARGET:-lambda}" = k8s ] && { "${WH[@]}" policy "${2:?file or reset}"; exit; }
     case ${2:?file or reset} in
       reset) rm -f infra/probe.auto.tfvars ;;
       *) cp "$2" infra/probe.auto.tfvars ;;
     esac
     "${TF[@]}" apply -input=false -auto-approve -no-color | grep -E '^Apply complete|Error' ;;
-  down) aws lambda put-function-concurrency --function-name "${FUNCTION_NAME:-aigw-byo-guardrail}" \
+  down) [ "${TARGET:-lambda}" = k8s ] && { "${WH[@]}" down; exit; }
+        aws lambda put-function-concurrency --function-name "${FUNCTION_NAME:-aigw-byo-guardrail}" \
           --reserved-concurrent-executions 0 --output text ;;
-  up)   aws lambda delete-function-concurrency --function-name "${FUNCTION_NAME:-aigw-byo-guardrail}" && echo up ;;
+  up)   [ "${TARGET:-lambda}" = k8s ] && { "${WH[@]}" up; exit; }
+        aws lambda delete-function-concurrency --function-name "${FUNCTION_NAME:-aigw-byo-guardrail}" && echo up ;;
   logs)
     since=${2:-30m}
-    aws logs tail "$("${TF[@]}" output -raw log_group)" --since "$since" --format short | redact
+    if [ "${TARGET:-lambda}" = k8s ]; then "${WH[@]}" logs | redact
+    else aws logs tail "$("${TF[@]}" output -raw log_group)" --since "$since" --format short | redact; fi
     [ -n "${MOCK_LOG_GROUP:-}" ] && { echo "--- mock"; aws logs tail "$MOCK_LOG_GROUP" --since "$since" --format short | redact; } || true ;;
   teardown)
     for mode in ${MODES:-closed open}; do
@@ -98,5 +107,5 @@ case ${1:-} in
       "${GW[@]}" guardrails delete "$(jq -r .guardrail "$f")" --force >/dev/null && echo "deleted guardrail $PREFIX-$mode"
       shred -u "$STATE/$mode.key" 2>/dev/null || rm -f "$STATE/$mode.key"; rm -f "$f"
     done ;;
-  *) sed -n '2,21p' "$0"; exit 1 ;;
+  *) sed -n '2,22p' "$0"; exit 1 ;;
 esac
