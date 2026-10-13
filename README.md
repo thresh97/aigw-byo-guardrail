@@ -17,6 +17,7 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 | `infra/` | Terraform for the Lambda, its Function URL, IAM, the log group and the token |
 | `mcp/server.py`, `infra/mcp.tf` | Optional probe MCP server for MCP guardrail tests (`mcp_server = true`): Streamable HTTP, stateless, tools `echo`, `get_canary`, `danger`, `whoami`; `/a/mcp` and `/b/mcp` act as two servers; static header `x-mcp-token` |
 | `webhook/server.py`, `k8s/webhook.sh` | The same handler as a plain HTTP server, deployed to Kubernetes (stock python image, code in a ConfigMap). Unlike a Function URL it passes the full `x-forwarded-for` chain through (see Findings, hybrid) |
+| [`aigw-byo-guardrail-mcp/`](aigw-byo-guardrail-mcp/README.md) | Companion article: this webhook as an MCP guardrail (`target: mcp_tools`), with the probe MCP server and `probe.sh`. Includes SaaS findings (MCP guardrails didn't run on 2026-10-13) and MCP integration gotchas |
 | `tests/` | `python3 -m unittest tests/test_handler.py`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |
 
 Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a tenant selected (`airs-cli doctor` all green), `jq`, `curl`.
