@@ -12,8 +12,8 @@
 # Env: NAME (default aigw-byo-guardrail), K8S_NAMESPACE (default default), KUBE_CONTEXT (optional),
 # IMAGE (default public.ecr.aws/docker/library/python:3.12-slim),
 # LOG_ARCHIVE (default ~/.local/state/aigw-byo-guardrail/k8s-<NAME>.log: logs of replaced pods; tokens are never logged).
-# Put it where the gateway may call it: on a hybrid gateway that's a host TRUSTED_CUSTOM_HOSTS allows
-# (e.g. the gateway's own namespace under a *.<ns>.svc.cluster.local entry).
+# Put it where the gateway may call it: on a hybrid gateway that's a host TRUSTED_CUSTOM_HOSTS allows. `url` prints
+# <name>.<ns>.svc: the gateway refuses *.svc.cluster.local webhook URLs even when trusted (see README Findings).
 # Policy files use the infra/ tfvars format; terraform (no providers, no state kept) converts them to JSON.
 set -euo pipefail
 NAME=${NAME:-aigw-byo-guardrail}
@@ -91,7 +91,7 @@ EOF
       reset) set_policy "$(policy_json)" ;;
       *) set_policy "$(policy_json "$2")" ;;
     esac ;;
-  url) echo "http://$NAME.$NS.svc.cluster.local/" ;;
+  url) echo "http://$NAME.$NS.svc/" ;;
   token) "${K[@]}" get secret "$NAME" -o jsonpath='{.data.TOKEN}' | base64 -d ;;
   down) archive; "${K[@]}" scale deploy/"$NAME" --replicas=0 >/dev/null && "${K[@]}" wait --for=delete pod -l app="$NAME" --timeout=60s >/dev/null 2>&1; echo down ;;
   up) "${K[@]}" scale deploy/"$NAME" --replicas=1 >/dev/null && "${K[@]}" rollout status deploy/"$NAME" --timeout=120s >/dev/null && echo up ;;

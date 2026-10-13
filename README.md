@@ -125,9 +125,9 @@ terraform -chdir=infra destroy
 
 ## Findings
 
-Tested 2026-09-30 and again 2026-10-09 on the SaaS gateway (no version exposed), and on 2026-10-12 on a hybrid gateway
-(image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed by `infra/`.
-`tests/e2e.sh` runs the same cases against either.
+Tested 2026-10-09 and 2026-10-12 on the SaaS gateway (no version exposed), and 2026-10-12 and 2026-10-13 on a hybrid
+gateway (image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed
+by `infra/`. `tests/cases.sh` runs the same cases against either.
 
 ### Both gateways
 
@@ -140,6 +140,8 @@ Tested 2026-09-30 and again 2026-10-09 on the SaaS gateway (no version exposed),
 - The default payload has `requestType` (`messages`), `provider` (`anthropic`), `metadata` (from `x-portkey-metadata`) and the
   request body. It has no client IP unless you list the header in `forwardHeaders`.
 - An egress IP can rotate within a NAT pool from one request to the next. Allowlist the whole range.
+- A client `x-portkey-trace-id` comes back unchanged in the response headers, and `x-portkey-metadata` reaches the
+  webhook payload's `metadata` as sent. The trace id itself isn't in the webhook payload or headers. Both are client-supplied.
 
 ### SaaS gateway
 
@@ -175,8 +177,13 @@ What the webhook receives (the ALB in its default `append` XFF mode, the webhook
   - Overwrite the client IP header in a proxy you run in front of the gateway (set it to the peer address, drop the
     client's value), so whatever reaches the webhook was set by you. An ALB alone can't: its XFF modes are append,
     preserve and remove, and with `remove` the Function URL fills in the gateway's own egress IP. Not tested here.
-  - Put the webhook behind a front end that keeps the full XFF chain (API Gateway, an ALB, a container) and read the entry
-    your trusted hop added (counting from the right). Not tested here.
+  - Put the webhook behind a front end that keeps the full XFF chain and set `trusted_hops` to the number of proxies you
+    trust (1 for a single ALB), so the handler reads the entry they added, counting from the right. `webhook/server.py`
+    (deployed by `k8s/webhook.sh`) keeps the chain. Not yet tested through a gateway: see the next bullet.
+- The hybrid gateway refuses an in-cluster webhook URL `http://<svc>.<gateway-ns>.svc.cluster.local/` with
+  `Webhook error: webhookURL rejected by SSRF policy`, even with `*.<gateway-ns>.svc.cluster.local` in `TRUSTED_CUSTOM_HOSTS`.
+  It never calls the webhook (446 with `failOnError: true`, 200 with no rule run with `false`). Use `<svc>.<ns>.svc` with a
+  matching `TRUSTED_CUSTOM_HOSTS` entry instead. Untested for webhooks; it is the name form that works for custom LLM hosts.
 - Header rules are unaffected by this and work as on SaaS.
 
 ## License
