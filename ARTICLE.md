@@ -10,7 +10,7 @@ versions:                 # component: version, as confirmed by that evidence
   aigw-saas: as of 2026-10-12 (no version exposed)
   aigw-image: 2.27.0
   aigw-chart: airs-gw-1.2.0
-related: []               # other article IDs
+related: [aigw-private-hosts]               # other article IDs
 supersedes: []
 superseded_by:
 tags: [guardrail, webhook, byo-guardrail, lambda, terraform, client-ip, headers, saas, hybrid]

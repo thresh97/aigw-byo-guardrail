@@ -183,7 +183,8 @@ What the webhook receives (the ALB in its default `append` XFF mode, the webhook
 - The hybrid gateway refuses an in-cluster webhook URL `http://<svc>.<gateway-ns>.svc.cluster.local/` with
   `Webhook error: webhookURL rejected by SSRF policy`, even with `*.<gateway-ns>.svc.cluster.local` in `TRUSTED_CUSTOM_HOSTS`.
   It never calls the webhook (446 with `failOnError: true`, 200 with no rule run with `false`). Use `<svc>.<ns>.svc` with a
-  matching `TRUSTED_CUSTOM_HOSTS` entry instead. Untested for webhooks; it is the name form that works for custom LLM hosts.
+  matching `TRUSTED_CUSTOM_HOSTS` entry instead (untested for webhooks; it's the form that works for custom LLM hosts). Private-host
+  behaviour in general: article `aigw-private-hosts`.
 - Header rules are unaffected by this and work as on SaaS.
 
 ## License
