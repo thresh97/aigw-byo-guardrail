@@ -13,7 +13,7 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 
 | Path | What |
 |---|---|
-| `webhook/handler.py` | The Lambda (Python stdlib only). It reads the policy from env `POLICY`, authenticates the gateway with a shared token in `x-guardrail-token`, and logs the headers it received (auth values redacted) to CloudWatch |
+| `webhook/handler.py` | The Lambda (Python stdlib only). It reads the policy from env `POLICY`, authenticates the gateway with a shared token in `x-guardrail-token`, and logs the headers it received (auth values redacted) to CloudWatch. `log_payload = true` in `terraform.tfvars` also logs the request and response objects (prompt and tool content; testing only) |
 | `infra/` | Terraform for the Lambda, its Function URL, IAM, the log group and the token |
 | `webhook/server.py`, `k8s/webhook.sh` | The same handler as a plain HTTP server, deployed to Kubernetes (stock python image, code in a ConfigMap). Unlike a Function URL it passes the full `x-forwarded-for` chain through (see Findings, hybrid) |
 | `tests/` | `python3 -m unittest tests/test_handler.py`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |

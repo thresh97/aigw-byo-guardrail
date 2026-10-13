@@ -78,6 +78,16 @@ class TrustedHops(unittest.TestCase):
                                             "deny_cidrs": ["198.51.100.7/32"]}))
         self.assertFalse(handler.evaluate({"x-forwarded-for": "192.0.2.10, 198.51.100.7"}, p)[0])
 
+    def test_payload_logged_only_when_enabled(self):
+        body = {"eventType": "beforeRequestHook", "request": {"json": {"secret": "s3"}}}
+        for on in (False, True):
+            handler.LOG_PAYLOAD = on
+            with self.assertLogs(level="INFO") as logs:
+                call(OK, body)
+            entry = json.loads(logs.records[-1].getMessage())
+            self.assertEqual("request" in entry, on)
+        handler.LOG_PAYLOAD = False
+
 
 if __name__ == "__main__":
     unittest.main()

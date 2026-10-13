@@ -60,8 +60,9 @@ resource "aws_lambda_function" "webhook" {
 
   environment {
     variables = {
-      TOKEN  = random_password.token.result
-      POLICY = jsonencode(var.policy)
+      TOKEN       = random_password.token.result
+      POLICY      = jsonencode(var.policy)
+      LOG_PAYLOAD = var.log_payload ? "1" : ""
     }
   }
 

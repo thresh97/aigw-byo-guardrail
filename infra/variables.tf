@@ -8,6 +8,12 @@ variable "name" {
   default = "aigw-byo-guardrail"
 }
 
+# Log the gateway's request and response objects (prompt and tool content) to CloudWatch. Testing only.
+variable "log_payload" {
+  type    = bool
+  default = false
+}
+
 # See webhook/handler.py for the schema.
 variable "policy" {
   type = object({

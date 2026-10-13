@@ -17,7 +17,8 @@ Policy (env POLICY, JSON):
   header_rules  [{"header": name, "require": regex} | {"header": name, "deny": regex}]
 Auth: the gateway must send env TOKEN in x-guardrail-token (set in the guardrail's headers).
 Every call logs the received header names (values of auth headers are dropped) so you can see
-what the gateway actually forwards.
+what the gateway actually forwards. Env LOG_PAYLOAD=1 also logs the request and response objects (prompt, tool
+call and result content goes to the logs; leave it off outside testing).
 """
 
 import base64
@@ -85,6 +86,7 @@ def evaluate(headers, policy):
 
 
 POLICY = load_policy(os.environ.get("POLICY"))
+LOG_PAYLOAD = os.environ.get("LOG_PAYLOAD", "") in ("1", "true")
 
 
 def respond(status, body):
@@ -106,7 +108,7 @@ def handler(event, context):
         payload = {}
 
     verdict, reason = evaluate(headers, POLICY)
-    log.info(json.dumps({
+    entry = {
         "verdict": verdict,
         "reason": reason,
         "eventType": payload.get("eventType"),
@@ -114,5 +116,10 @@ def handler(event, context):
         "provider": payload.get("provider"),
         "metadata": payload.get("metadata"),
         "headers": {k: ("<redacted>" if k in SECRET_HEADERS else v) for k, v in sorted(headers.items())},
-    }))
+    }
+    if LOG_PAYLOAD:
+        entry["payload_keys"] = sorted(payload)
+        entry["request"] = payload.get("request")
+        entry["response"] = payload.get("response")
+    log.info(json.dumps(entry))
     return respond(200, {"verdict": verdict, "data": {"reason": reason}})
