@@ -117,7 +117,7 @@ terraform -chdir=infra destroy
 
 ## Findings
 
-Tested 2026-10-09 and 2026-10-12 on the SaaS gateway (no version exposed), and 2026-10-12 and 2026-10-13 on a hybrid gateway (image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed by `infra/`. `tests/cases.sh` runs the same cases against either.
+Tested 2026-10-09 and 2026-10-12 on the SaaS gateway (no version exposed), and 2026-10-12 and 2026-10-13 on a hybrid gateway (image 2.27.0, chart airs-gw-1.2.0, EKS behind an AWS ALB), with the webhook on a Lambda Function URL as deployed by `infra/`. On 2026-10-13 the hybrid cases were also run with the webhook in the cluster, as deployed by `k8s/webhook.sh`. `tests/cases.sh` runs the same cases against any of these.
 
 ### Both gateways
 
@@ -155,11 +155,11 @@ What the webhook receives (the ALB in its default `append` XFF mode, the webhook
 
 - The Lambda Function URL itself keeps only the leftmost `x-forwarded-for` entry: a direct request with `x-forwarded-for: 192.0.2.10, 198.51.100.7` reaches the handler as `192.0.2.10`. So no handler logic can recover the load balancer's entry.
 - In practice, with `ip_headers = ["x-forwarded-for"]`, a client **bypasses a deny rule** and **passes an allowlist** by sending `x-forwarded-for: <an allowed IP>`.
-- **IP rules in this example aren't safe on a hybrid gateway as deployed.** Options:
+- **IP rules aren't safe with the webhook on a Function URL.** Options:
   - Enforce client IPs at your own load balancer instead (ALB security group or listener rules, WAF); the gateway sits behind it anyway.
   - Overwrite the client IP header in a proxy you run in front of the gateway (set it to the peer address, drop the client's value), so whatever reaches the webhook was set by you. An ALB alone can't: its XFF modes are append, preserve and remove, and with `remove` the Function URL fills in the gateway's own egress IP. Not tested here.
-  - Put the webhook behind a front end that keeps the full XFF chain and set `trusted_hops` to the number of proxies you trust (1 for a single ALB), so the handler reads the entry they added, counting from the right. `webhook/server.py` (deployed by `k8s/webhook.sh`) keeps the chain. Not yet tested through a gateway: see the next bullet.
-- The hybrid gateway refuses an in-cluster webhook URL `http://<svc>.<gateway-ns>.svc.cluster.local/` with `Webhook error: webhookURL rejected by SSRF policy`, even with `*.<gateway-ns>.svc.cluster.local` in `TRUSTED_CUSTOM_HOSTS`. It never calls the webhook (446 with `failOnError: true`, 200 with no rule run with `false`). Use `<svc>.<ns>.svc` with a matching `TRUSTED_CUSTOM_HOSTS` entry instead (untested for webhooks; it's the form that works for custom LLM hosts). Private-host behaviour in general: article `aigw-private-hosts`.
+  - Put the webhook behind a front end that keeps the full XFF chain and set `trusted_hops` to the number of proxies you trust (1 for a single ALB), so the handler reads the entry they added, counting from the right. `webhook/server.py` (deployed by `k8s/webhook.sh`) keeps the chain. **Tested, and it closes the gap:** with the webhook in the gateway's cluster and `trusted_hops = 1` behind one ALB, a client sending `x-forwarded-for: 192.0.2.10` reached the webhook as `192.0.2.10, <client IP>`, and the handler used the client IP. Deny and allowlist rules both gave 446 despite the spoofed header.
+- To reach an in-cluster webhook, the hybrid gateway needs its URL as `http://<svc>.<ns>.svc/` (or `<svc>.<ns>`), with that exact host in `TRUSTED_CUSTOM_HOSTS`. `k8s/webhook.sh url` prints this form. It refuses `http://<svc>.<ns>.svc.cluster.local/` with `Webhook error: webhookURL rejected by SSRF policy`, even with an exact or wildcard `TRUSTED_CUSTOM_HOSTS` entry, and never calls the webhook (446 with `failOnError: true`, 200 with no rule run with `false`). An untrusted `.svc` URL fails with `Webhook error: fetch failed`, the same error as a webhook that's down. SCM saves the guardrail with any of these URLs. Private-host behaviour in general: article `aigw-private-hosts`.
 - Header rules are unaffected by this and work as on SaaS.
 
 ## License
