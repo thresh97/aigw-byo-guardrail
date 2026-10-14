@@ -1,19 +1,25 @@
 # aigw-byo-guardrail-mcp
 
-The [webhook guardrail](../README.md) used on MCP tool calls (`target: mcp_tools`) instead of LLM requests. On the SaaS gateway on 2026-10-13, MCP guardrails didn't run at all: not the webhook check, not a built-in check, whether mapped to an MCP server or set as the workspace's default MCP guardrail. Hybrid hasn't been tested yet. This page also covers how SaaS serves MCP and three integration gotchas found on the way.
+The [webhook guardrail](../README.md) used on MCP tool calls (`target: mcp_tools`) instead of LLM requests. On the SaaS gateway on 2026-10-13, MCP guardrails didn't run at all: not the webhook check, not a built-in check, whether mapped to an MCP server or set as the workspace's default MCP guardrail. On the hybrid gateway (2.27.0, unified mode) on 2026-10-13 and 2026-10-14 they did run, input and output, with a few parameters that don't behave as they do for LLM guardrails: per-server `run_on` is ignored, `sequential` doesn't stop at the first failing check, and `soft_deny_200` changes nothing. This page also covers how SaaS serves MCP and three integration gotchas found on the way.
 
 > **Disclaimer:** Personal test notes. Not an official Palo Alto Networks or Portkey statement, and no support. Behavior may change in later releases.
 
 ## How to recognize it
+
+On SaaS:
 
 - A tool call that the guardrail should block comes back 200 with the tool's result.
 - The webhook is never called: its logs have no invocation for the call. Any webhook that logs requests shows this; [`webhook/handler.py`](../webhook/handler.py) logs every call.
 - A built-in check (for example `default.contains` with a deny word) mapped the same way doesn't block either.
 - The guardrail and its mappings look right in the control plane: the guardrail has `target: mcp_tools`, and the MCP server object lists it under `guardrail_mappings`.
 
+On hybrid, if you mapped a tool output-only (`run_on: ["output"]`), the webhook still gets `beforeRequestHook` for it, and input denies still block.
+
 ## Workaround
 
-None known on SaaS. The hybrid gateway is the next test here.
+- **SaaS:** none known. Use a hybrid gateway if you need MCP guardrails.
+- **Hybrid, output-only checks:** `run_on` can't restrict a mapping to output. In the webhook, act on `eventType` instead: return `verdict: true` for `beforeRequestHook` and decide on `afterRequestHook`.
+- **Hybrid, block reason:** a webhook `verdict: false` reaches the client only as "Webhook request failed". Log your reason in the webhook; the client can't see it.
 
 ## Setup used
 
@@ -22,10 +28,11 @@ None known on SaaS. The hybrid gateway is the next test here.
 - MCP guardrail: `target: mcp_tools`, one check `default.webhook` (`webhookURL`, `headers: {x-guardrail-token: ...}`, `forwardHeaders: [x-app]`, `failOnError: false`), `actions.deny: true`.
 - Mappings set with `PUT /ai_gw/v2/guardrails/<id>/mcp-servers`, body `{"mcp_servers": {"<mcp server id>": {"run_on": ["input","output"], "mcp_integration_capability_ids": []}}}` (empty list = all tools). This call replaces the whole set. The MCP server id is the workspace-level server object, not the integration id; tool ids come from `GET /ai_gw/v2/mcp-servers/<id>/capabilities`.
 - Driver: [`probe.sh`](probe.sh) (`GW`, `KEY`, `A`, `B`), one fresh MCP session per case, with and without `x-app: blockme`.
+- Hybrid: the same webhook, an existing MCP server on the hybrid gateway with the guardrail mapped to one tool, the guardrail edited between runs with `PUT /ai_gw/v2/guardrails/<id>` (body `{name, checks, actions}`, the call the CLI's update makes). A second check, `default.contains` with words `foo` and `bar`, was added for the multi-check cases.
 
 ## Findings
 
-Tested 2026-10-13 on the SaaS gateway (no version exposed), with the probe server and webhook on Lambda Function URLs.
+SaaS: tested 2026-10-13 on the SaaS gateway (no version exposed), with the probe server and webhook on Lambda Function URLs. Hybrid: tested 2026-10-13 and 2026-10-14 against gateway image 2.27.0 (chart airs-gw-1.2.0, `SERVER_MODE=unified`) with the same webhook.
 
 ### SaaS: MCP guardrails don't run
 
@@ -38,6 +45,35 @@ Tested 2026-10-13 on the SaaS gateway (no version exposed), with the probe serve
 | Rechecked about 60 to 75 minutes after the last change | blocked | 200, webhook not called |
 
 A direct call to the webhook in the same window was logged, so the zero count is real. Whether workspace-default MCP guardrails are meant to be supported isn't documented.
+
+### Hybrid: MCP guardrails run
+
+- Only `tools/call` of mapped tools reaches the guardrail: once before the call (`beforeRequestHook`) and once after (`afterRequestHook`). `tools/list` and unmapped tools don't.
+- The MCP URL is `https://<gateway>/m/<workspace-slug>/<server-slug>/mcp`; the server slug is the integration's slug.
+- The webhook payload has `requestType: "mcpToolCall"` and `provider: "mcp"`. `request.json` is `{name, arguments}`, `request.text` the arguments as JSON, and `response.json` the tool result (empty on before; `statusCode` 200 on after). `metadata` is the client's `x-portkey-metadata` plus `mcpServerId` (server slug), `mcpWorkspaceId` (workspace slug) and `mcpToolName`.
+- Without `forwardHeaders` the webhook sees only the gateway's own headers and the check's static `headers`: `user-agent: node`, `x-forwarded-for` = the gateway's egress IP, no trace id.
+- **Deny:** HTTP 200 with JSON-RPC error `-32446` "Request blocked by guardrail", `data: {guardrail_id, reason, check_id}`. For a webhook `verdict: false` the reason is "default.webhook: Webhook request failed", not the webhook's reason (same as on LLM requests). A deny on input stops the call, so there's no after hook.
+
+### Hybrid: forwardHeaders
+
+- The control plane refuses some names with error AB01 "header '<name>' cannot be forwarded": `authorization`, `x-portkey-api-key`, `x-portkey-metadata`, `x-portkey-config`, `x-api-key`, `cookie`. It accepts `x-portkey-trace-id`, `user-agent`, `x-forwarded-for`, `mcp-session-id` and custom names.
+- Forwarded headers arrive on both hooks. Forwarding `x-forwarded-for` gives the webhook the client's address instead of the gateway's (behind a load balancer that sets it), and `user-agent` gives it the client's. So a client-IP rule from the [guide](../README.md) needs `x-forwarded-for` in `forwardHeaders` for MCP.
+- `mcp-session-id` only arrives if the upstream server uses sessions.
+
+### Hybrid: actions and check parameters
+
+| Setting | LLM-guardrail meaning | Observed on MCP tool calls |
+|---|---|---|
+| mapping `run_on: ["output"]` | output only | **Input still runs**: `beforeRequestHook` is called and input denies block. The mapping reads back as output, over 14 hours and several guardrail versions |
+| `actions.sequential: true` | run checks one after another | **Doesn't stop at the first failing check**: with two failing checks, both run (the webhook is called even when the check before it failed), and the reason lists both, joined with "; ". From the client and the webhook it looks the same as `false` |
+| `actions.sequential: false` | run in parallel | Both checks run; reason lists both in check order; `check_id` is the first check's |
+| `actions.soft_deny_200: true` | deny with HTTP 200 | **No difference**: a deny is already HTTP 200 with the JSON-RPC error; response identical |
+| `actions.async: true` | check without blocking | Nothing blocked; both hooks still called, even after a failing input check |
+| `actions.deny: false` | report, don't block | Nothing blocked; both hooks called; no hook results in the client's response headers or body |
+| `failOnError: false`, webhook down | fail open | Call goes through |
+| `failOnError: true`, webhook down | fail closed | Blocked; the reason shows the real cause, e.g. "default.webhook: Webhook error: HTTP error! status: 429" |
+
+Guardrail changes reached the hybrid gateway in about a minute. A mapping change through `PUT .../mcp-servers` doesn't change the guardrail's `version_id`; a check or action change does.
 
 ### SaaS: where MCP is served
 
