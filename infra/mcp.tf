@@ -5,6 +5,12 @@ variable "mcp_server" {
   default = false
 }
 
+# Optional probe modes (EXTRA_TOOL, JWT_SERVERS, OAUTH_SERVERS, JWT_JWKS, JWT_ISSUER, ...), see mcp/server.py.
+variable "mcp_env" {
+  type    = map(string)
+  default = {}
+}
+
 locals {
   mcp_name = "${var.name}-mcp"
   mcp      = var.mcp_server ? 1 : 0
@@ -57,7 +63,7 @@ resource "aws_lambda_function" "mcp" {
   memory_size      = 128
 
   environment {
-    variables = { TOKEN = random_password.mcp_token[0].result }
+    variables = merge(var.mcp_env, { TOKEN = random_password.mcp_token[0].result })
   }
 
   depends_on = [aws_cloudwatch_log_group.mcp, aws_iam_role_policy_attachment.mcp_logs]

@@ -89,5 +89,49 @@ class TrustedHops(unittest.TestCase):
         handler.LOG_PAYLOAD = False
 
 
+class ToolPolicy(unittest.TestCase):
+    POL = json.dumps({"eng-l1": ["echo"], "hr-shared-l1": ["whoami"], "ws-b/hr-shared-l1": ["get_canary"]})
+
+    def verdict(self, server, tool, ws="ws-a", pol=POL):
+        md = {"mcpServerId": server, "mcpWorkspaceId": ws, "mcpToolName": tool}
+        return call({**OK, "x-tool-policy": pol}, {"eventType": "beforeRequestHook", "metadata": md})[1]
+
+    def test_allowed_and_denied(self):
+        self.assertTrue(self.verdict("eng-l1", "echo")["verdict"])
+        b = self.verdict("eng-l1", "danger")
+        self.assertFalse(b["verdict"])
+        self.assertIn("not allowed on eng-l1", b["data"]["reason"])
+
+    def test_unknown_server_denied(self):
+        self.assertFalse(self.verdict("eng-l2", "echo")["verdict"])
+
+    def test_no_substring_or_prefix_match(self):
+        self.assertFalse(self.verdict("eng-l10", "echo")["verdict"])
+        self.assertFalse(self.verdict("eng-l1", "ech")["verdict"])
+
+    def test_workspace_key_wins(self):
+        self.assertTrue(self.verdict("hr-shared-l1", "whoami")["verdict"])
+        self.assertFalse(self.verdict("hr-shared-l1", "whoami", ws="ws-b")["verdict"])
+        self.assertTrue(self.verdict("hr-shared-l1", "get_canary", ws="ws-b")["verdict"])
+
+    def test_malformed_denied(self):
+        for pol in ("{", "[]", '{"eng-l1": "echo"}', '{"eng-l1": [1]}'):
+            b = self.verdict("eng-l1", "echo", pol=pol)
+            self.assertFalse(b["verdict"], pol)
+            self.assertIn("malformed", b["data"]["reason"])
+
+    def test_no_mcp_metadata_denied(self):
+        self.assertFalse(call({**OK, "x-tool-policy": self.POL})[1]["verdict"])
+
+    def test_off_without_header(self):
+        md = {"mcpServerId": "x", "mcpToolName": "y"}
+        self.assertTrue(call(OK, {"eventType": "beforeRequestHook", "metadata": md})[1]["verdict"])
+
+    def test_other_rules_still_apply(self):
+        md = {"mcpServerId": "eng-l1", "mcpToolName": "echo"}
+        h = {**OK, "x-tool-policy": self.POL, "x-app": "blockme"}
+        self.assertFalse(call(h, {"eventType": "beforeRequestHook", "metadata": md})[1]["verdict"])
+
+
 if __name__ == "__main__":
     unittest.main()

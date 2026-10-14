@@ -15,6 +15,13 @@ Policy (env POLICY, JSON):
   allow_cidrs   if non-empty, the client IP must be inside one of these
   deny_cidrs    the client IP must not be inside any of these
   header_rules  [{"header": name, "require": regex} | {"header": name, "deny": regex}]
+MCP tool allowlist (per request, from header x-tool-policy, normally a static header in the guardrail check, so the
+policy lives in the guardrail config and edits need no Lambda or MCP integration change):
+  x-tool-policy {"<server slug>": [tool, ...], "<workspace>/<server slug>": [...]}
+  The server comes from metadata.mcpServerId (the integration slug), the workspace from metadata.mcpWorkspaceId, the tool
+  from metadata.mcpToolName. A "<workspace>/<slug>" key wins over a bare slug. Anything not listed is denied, and so is a
+  server missing from the policy, a request without MCP metadata and a malformed policy. No header: the rule is off.
+  Never list x-tool-policy in the guardrail's forwardHeaders (a client could then send its own policy).
 Auth: the gateway must send env TOKEN in x-guardrail-token (set in the guardrail's headers).
 Every call logs the received header names (values of auth headers are dropped) so you can see
 what the gateway actually forwards. Env LOG_PAYLOAD=1 also logs the request and response objects (prompt, tool
@@ -85,6 +92,30 @@ def evaluate(headers, policy):
     return True, "ok"
 
 
+TOOL_POLICY_HEADER = "x-tool-policy"
+
+
+def evaluate_tools(raw, metadata):
+    """MCP tool allowlist. raw = the x-tool-policy header value. Return (verdict, reason)."""
+    try:
+        policy = json.loads(raw)
+        if not isinstance(policy, dict) or not all(
+                isinstance(v, list) and all(isinstance(t, str) for t in v) for v in policy.values()):
+            raise ValueError("not an object of string lists")
+    except ValueError as e:
+        return False, f"malformed {TOOL_POLICY_HEADER}: {e}"
+    m = metadata if isinstance(metadata, dict) else {}
+    server, ws, tool = m.get("mcpServerId"), m.get("mcpWorkspaceId"), m.get("mcpToolName")
+    if not server or not tool:
+        return False, "no mcpServerId/mcpToolName in metadata"
+    key = f"{ws}/{server}" if f"{ws}/{server}" in policy else server
+    if key not in policy:
+        return False, f"server {server} (workspace {ws}) not in {TOOL_POLICY_HEADER}"
+    if tool not in policy[key]:
+        return False, f"tool {tool} not allowed on {key}"
+    return True, f"tool {tool} allowed on {key}"
+
+
 POLICY = load_policy(os.environ.get("POLICY"))
 LOG_PAYLOAD = os.environ.get("LOG_PAYLOAD", "") in ("1", "true")
 
@@ -108,6 +139,8 @@ def handler(event, context):
         payload = {}
 
     verdict, reason = evaluate(headers, POLICY)
+    if verdict and TOOL_POLICY_HEADER in headers:
+        verdict, reason = evaluate_tools(headers[TOOL_POLICY_HEADER], payload.get("metadata"))
     entry = {
         "verdict": verdict,
         "reason": reason,
