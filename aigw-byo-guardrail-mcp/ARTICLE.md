@@ -13,6 +13,6 @@ versions:                 # component: version, as confirmed by that evidence
 related: [aigw-byo-guardrail]               # other article IDs
 supersedes: []
 superseded_by:
-tags: [guardrail, webhook, byo-guardrail, mcp, mcp-gateway, saas, hybrid, static-headers, lambda]
+tags: [guardrail, webhook, byo-guardrail, mcp, mcp-gateway, saas, hybrid, static-headers, lambda, cache]
 ---
 Metadata for this article, read by `kb`, Obsidian Dataview and agents. The content is in [README.md](README.md).

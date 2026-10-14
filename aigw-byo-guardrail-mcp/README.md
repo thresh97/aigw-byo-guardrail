@@ -1,6 +1,6 @@
 # aigw-byo-guardrail-mcp
 
-The [webhook guardrail](../README.md) used on MCP tool calls (`target: mcp_tools`) instead of LLM requests. On the SaaS gateway on 2026-10-13, MCP guardrails didn't run at all: not the webhook check, not a built-in check, whether mapped to an MCP server or set as the workspace's default MCP guardrail. On the hybrid gateway (2.27.0, unified mode) on 2026-10-13 and 2026-10-14 they did run, input and output, with a few parameters that don't behave as they do for LLM guardrails: per-server `run_on` is ignored, `sequential` doesn't stop at the first failing check, and `soft_deny_200` changes nothing. This page also covers how SaaS serves MCP and three integration gotchas found on the way.
+The [webhook guardrail](../README.md) used on MCP tool calls (`target: mcp_tools`) instead of LLM requests. On the SaaS gateway on 2026-10-13, MCP guardrails didn't run at all: not the webhook check, not a built-in check, whether mapped to an MCP server or set as the workspace's default MCP guardrail. On the hybrid gateway (2.27.0, unified mode) on 2026-10-13 and 2026-10-14 they did run, input and output, with a few parameters that don't behave as they do for LLM guardrails: `sequential` doesn't stop at the first failing check, and `soft_deny_200` changes nothing. A new or changed guardrail mapping doesn't reach the hybrid gateway until the MCP integration itself is updated; until then the gateway keeps the mappings it had (an earlier version of this page reported per-server `run_on` as ignored, which was this cache). This page also covers how SaaS serves MCP and three integration gotchas found on the way.
 
 > **Disclaimer:** Personal test notes. Not an official Palo Alto Networks or Portkey statement, and no support. Behavior may change in later releases.
 
@@ -13,12 +13,13 @@ On SaaS:
 - A built-in check (for example `default.contains` with a deny word) mapped the same way doesn't block either.
 - The guardrail and its mappings look right in the control plane: the guardrail has `target: mcp_tools`, and the MCP server object lists it under `guardrail_mappings`.
 
-On hybrid, if you mapped a tool output-only (`run_on: ["output"]`), the webhook still gets `beforeRequestHook` for it, and input denies still block.
+On hybrid, after you map a guardrail to an MCP server or change a mapping (`run_on`, tools), calls keep behaving as before the change: a new mapping's webhook is never called, and a tool switched to output-only (`run_on: ["output"]`) still gets `beforeRequestHook`. The mapping reads back correctly, and waiting doesn't help.
 
 ## Workaround
 
 - **SaaS:** none known. Use a hybrid gateway if you need MCP guardrails.
-- **Hybrid, output-only checks:** `run_on` can't restrict a mapping to output. In the webhook, act on `eventType` instead: return `verdict: true` for `beforeRequestHook` and decide on `afterRequestHook`.
+- **Hybrid, mapping changes:** after `PUT .../mcp-servers`, update the MCP integration (re-saving its unchanged `configurations` is enough, for example `airs-cli aigateway mcp integrations update <id> --file <same config>`). The gateway then drops its cached server data and the new mappings apply at once. Editing the guardrail's checks or actions doesn't do this.
+- **Defence in depth for output-only checks:** a webhook can also act on `eventType` (return `verdict: true` for `beforeRequestHook`), so a stale mapping can't block on input.
 - **Hybrid, block reason:** a webhook `verdict: false` reaches the client only as "Webhook request failed". Log your reason in the webhook; the client can't see it.
 
 ## Setup used
@@ -64,7 +65,7 @@ A direct call to the webhook in the same window was logged, so the zero count is
 
 | Setting | LLM-guardrail meaning | Observed on MCP tool calls |
 |---|---|---|
-| mapping `run_on: ["output"]` | output only | **Input still runs**: `beforeRequestHook` is called and input denies block. The mapping reads back as output, over 14 hours and several guardrail versions |
+| mapping `run_on: ["output"]` | output only | Output only, **once the integration has been updated** (see below). Before that the old input+output mapping kept running: `beforeRequestHook` called and input denies blocking, for over 14 hours and several guardrail versions |
 | `actions.sequential: true` | run checks one after another | **Doesn't stop at the first failing check**: with two failing checks, both run (the webhook is called even when the check before it failed), and the reason lists both, joined with "; ". From the client and the webhook it looks the same as `false` |
 | `actions.sequential: false` | run in parallel | Both checks run; reason lists both in check order; `check_id` is the first check's |
 | `actions.soft_deny_200: true` | deny with HTTP 200 | **No difference**: a deny is already HTTP 200 with the JSON-RPC error; response identical |
@@ -73,7 +74,11 @@ A direct call to the webhook in the same window was logged, so the zero count is
 | `failOnError: false`, webhook down | fail open | Call goes through |
 | `failOnError: true`, webhook down | fail closed | Blocked; the reason shows the real cause, e.g. "default.webhook: Webhook error: HTTP error! status: 429" |
 
-Guardrail changes reached the hybrid gateway in about a minute. A mapping change through `PUT .../mcp-servers` doesn't change the guardrail's `version_id`; a check or action change does.
+### Hybrid: when changes take effect
+
+- Check and action changes reached the hybrid gateway in about a minute; they change the guardrail's `version_id`.
+- Mapping changes through `PUT .../mcp-servers` don't change `version_id` and **don't take effect** until the gateway's cached data for that MCP server is invalidated. An update to the MCP integration does that (the gateway logs "Invalidating capabilities cache for MCP server …"); guardrail check edits don't. A new guardrail mapped to a server that had already been used didn't run for over 7 minutes, then ran right after the integration was re-saved. A tool switched to `run_on: ["output"]` still got both hooks 75 seconds later, then only `afterRequestHook` after the re-save, and both again after switching back and re-saving.
+- Not tested: whether the cache expires on its own after longer than 14 hours, or on a gateway restart.
 
 ### SaaS: where MCP is served
 
