@@ -28,3 +28,27 @@ variable "policy" {
     })), [])
   })
 }
+
+# Prisma AIRS scan of MCP tool calls (webhook/airs.py). null = off.
+variable "airs" {
+  type = object({
+    profile        = optional(string)
+    input_profile  = optional(string)
+    output_profile = optional(string)
+    content        = optional(string)
+    fail           = optional(string)
+    max_bytes      = optional(number)
+    timeout_ms     = optional(number)
+    base_url       = optional(string)
+    app_name       = optional(string)
+  })
+  default = null
+}
+
+# AIRS runtime API key. Pass it as TF_VAR_airs_api_key rather than writing it to a tfvars file. It ends up in the
+# Lambda's environment and the Terraform state.
+variable "airs_api_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}

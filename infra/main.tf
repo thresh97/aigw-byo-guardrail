@@ -25,8 +25,15 @@ resource "random_password" "token" {
 
 data "archive_file" "webhook" {
   type        = "zip"
-  source_file = "${path.module}/../webhook/handler.py"
   output_path = "${path.module}/.build/webhook.zip"
+  source {
+    content  = file("${path.module}/../webhook/handler.py")
+    filename = "handler.py"
+  }
+  source {
+    content  = file("${path.module}/../webhook/airs.py")
+    filename = "airs.py"
+  }
 }
 
 resource "aws_iam_role" "webhook" {
@@ -55,15 +62,18 @@ resource "aws_lambda_function" "webhook" {
   handler          = "handler.handler"
   filename         = data.archive_file.webhook.output_path
   source_code_hash = data.archive_file.webhook.output_base64sha256
-  timeout          = 5
+  timeout          = var.airs == null ? 5 : 15
   memory_size      = 128
 
   environment {
-    variables = {
+    variables = merge({
       TOKEN       = random_password.token.result
       POLICY      = jsonencode(var.policy)
       LOG_PAYLOAD = var.log_payload ? "1" : ""
-    }
+      }, var.airs == null ? {} : {
+      AIRS         = jsonencode({ for k, v in var.airs : k => v if v != null })
+      AIRS_API_KEY = var.airs_api_key
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.webhook, aws_iam_role_policy_attachment.logs]

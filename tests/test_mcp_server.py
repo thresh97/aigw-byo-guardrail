@@ -40,7 +40,7 @@ class McpServer(unittest.TestCase):
 
     def test_tools(self):
         _, b = call({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        self.assertEqual([t["name"] for t in b["result"]["tools"]], ["echo", "get_canary", "danger", "whoami"])
+        self.assertEqual([t["name"] for t in b["result"]["tools"]], ["echo", "get_canary", "danger", "whoami", "get_page"])
         _, b = call({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                      "params": {"name": "echo", "arguments": {"text": "hi"}}})
         self.assertEqual(b["result"], {"content": [{"type": "text", "text": "hi"}], "isError": False})

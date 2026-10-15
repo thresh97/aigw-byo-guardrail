@@ -22,6 +22,8 @@ policy lives in the guardrail config and edits need no Lambda or MCP integration
   from metadata.mcpToolName. A "<workspace>/<slug>" key wins over a bare slug. Anything not listed is denied, and so is a
   server missing from the policy, a request without MCP metadata and a malformed policy. No header: the rule is off.
   Never list x-tool-policy in the guardrail's forwardHeaders (a client could then send its own policy).
+Prisma AIRS scan of MCP tool calls (env AIRS and AIRS_API_KEY; off when AIRS is unset): runs after the rules above pass,
+and an AIRS block denies. Config and behavior: airs.py.
 Auth: the gateway must send env TOKEN in x-guardrail-token (set in the guardrail's headers).
 Every call logs the received header names (values of auth headers are dropped) so you can see
 what the gateway actually forwards. Env LOG_PAYLOAD=1 also logs the request and response objects (prompt, tool
@@ -35,6 +37,8 @@ import json
 import logging
 import os
 import re
+
+import airs
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -118,6 +122,7 @@ def evaluate_tools(raw, metadata):
 
 POLICY = load_policy(os.environ.get("POLICY"))
 LOG_PAYLOAD = os.environ.get("LOG_PAYLOAD", "") in ("1", "true")
+AIRS = airs.load_config(os.environ.get("AIRS"))
 
 
 def respond(status, body):
@@ -141,6 +146,9 @@ def handler(event, context):
     verdict, reason = evaluate(headers, POLICY)
     if verdict and TOOL_POLICY_HEADER in headers:
         verdict, reason = evaluate_tools(headers[TOOL_POLICY_HEADER], payload.get("metadata"))
+    scan = None
+    if verdict and AIRS:
+        verdict, reason, scan = airs.check(payload, AIRS, os.environ.get("AIRS_API_KEY"))
     entry = {
         "verdict": verdict,
         "reason": reason,
@@ -150,6 +158,8 @@ def handler(event, context):
         "metadata": payload.get("metadata"),
         "headers": {k: ("<redacted>" if k in SECRET_HEADERS else v) for k, v in sorted(headers.items())},
     }
+    if scan:
+        entry["airs"] = scan
     if LOG_PAYLOAD:
         entry["payload_keys"] = sorted(payload)
         entry["request"] = payload.get("request")

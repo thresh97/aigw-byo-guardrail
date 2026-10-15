@@ -9,6 +9,8 @@
 #   bash k8s/webhook.sh logs                     # every webhook line since `deploy` (pods replaced by policy/down are archived)
 #   bash k8s/webhook.sh delete
 #
+#   AIRS='{"profile":"<name>"}' AIRS_API_KEY=... bash k8s/webhook.sh deploy   # also scan MCP tool calls with Prisma AIRS
+#                                                  (webhook/airs.py; redeploy without AIRS to turn it off)
 # Env: NAME (default aigw-byo-guardrail), K8S_NAMESPACE (default default), KUBE_CONTEXT (optional),
 # IMAGE (default public.ecr.aws/docker/library/python:3.12-slim),
 # LOG_ARCHIVE (default ~/.local/state/aigw-byo-guardrail/k8s-<NAME>.log: logs of replaced pods; tokens are never logged).
@@ -36,7 +38,9 @@ policy_json() {  # policy_json [file.tfvars]: the POLICY env value, with infra/v
   terraform -chdir="$d" output -raw policy; rm -rf "$d"
 }
 set_policy() {
-  "${K[@]}" create configmap "$NAME-policy" --from-literal=POLICY="$1" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  local a; a=$("${K[@]}" get configmap "$NAME-policy" -o jsonpath='{.data.AIRS}' 2>/dev/null || true)  # keep the AIRS setting
+  "${K[@]}" create configmap "$NAME-policy" --from-literal=POLICY="$1" --from-literal=AIRS="$a" --dry-run=client -o yaml \
+    | "${K[@]}" apply -f - >/dev/null
   archive; "${K[@]}" rollout restart deploy/"$NAME" >/dev/null
   "${K[@]}" rollout status deploy/"$NAME" --timeout=120s >/dev/null && echo "policy applied: $1"
 }
@@ -45,9 +49,12 @@ case ${1:-} in
   deploy)
     "${K[@]}" get secret "$NAME" >/dev/null 2>&1 || \
       "${K[@]}" create secret generic "$NAME" --from-literal=TOKEN="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 40)" >/dev/null
-    "${K[@]}" create configmap "$NAME-code" --from-file=webhook/handler.py --from-file=webhook/server.py \
+    "${K[@]}" create secret generic "$NAME-airs" --from-literal=AIRS_API_KEY="${AIRS_API_KEY:-}" \
       --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-    "${K[@]}" create configmap "$NAME-policy" --from-literal=POLICY="$(policy_json "${2:-}")" \
+    "${K[@]}" create configmap "$NAME-code" --from-file=webhook/handler.py --from-file=webhook/server.py \
+      --from-file=webhook/airs.py \
+      --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+    "${K[@]}" create configmap "$NAME-policy" --from-literal=POLICY="$(policy_json "${2:-}")" --from-literal=AIRS="${AIRS:-}" \
       --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
     "${K[@]}" apply -f - <<EOF
 apiVersion: apps/v1
@@ -69,6 +76,8 @@ spec:
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
             - {name: TOKEN, valueFrom: {secretKeyRef: {name: $NAME, key: TOKEN}}}
             - {name: POLICY, valueFrom: {configMapKeyRef: {name: $NAME-policy, key: POLICY}}}
+            - {name: AIRS, valueFrom: {configMapKeyRef: {name: $NAME-policy, key: AIRS, optional: true}}}
+            - {name: AIRS_API_KEY, valueFrom: {secretKeyRef: {name: $NAME-airs, key: AIRS_API_KEY, optional: true}}}
           ports: [{containerPort: 8080}]
           readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 5}
           resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
@@ -96,6 +105,6 @@ EOF
   down) archive; "${K[@]}" scale deploy/"$NAME" --replicas=0 >/dev/null && "${K[@]}" wait --for=delete pod -l app="$NAME" --timeout=60s >/dev/null 2>&1; echo down ;;
   up) "${K[@]}" scale deploy/"$NAME" --replicas=1 >/dev/null && "${K[@]}" rollout status deploy/"$NAME" --timeout=120s >/dev/null && echo up ;;
   logs) cat "$LOG_ARCHIVE" 2>/dev/null; "${K[@]}" logs -l app="$NAME" --tail=-1 ;;
-  delete) "${K[@]}" delete deploy/"$NAME" svc/"$NAME" secret/"$NAME" cm/"$NAME-code" cm/"$NAME-policy" --ignore-not-found; rm -f "$LOG_ARCHIVE" ;;
+  delete) "${K[@]}" delete deploy/"$NAME" svc/"$NAME" secret/"$NAME" secret/"$NAME-airs" cm/"$NAME-code" cm/"$NAME-policy" --ignore-not-found; rm -f "$LOG_ARCHIVE" ;;
   *) sed -n '2,19p' "$0"; exit 1 ;;
 esac
