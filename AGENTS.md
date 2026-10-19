@@ -1,9 +1,11 @@
 # AGENTS.md
 
 Guidance for coding agents running or changing this repo. Read README.md first: it explains the webhook, the policy
-format and the test flow. The two nested articles build on it: [`aigw-byo-guardrail-mcp/`](aigw-byo-guardrail-mcp/README.md)
-(the webhook as an MCP guardrail, with the probe MCP server) and [`aigw-mcp-airs-webhook/`](aigw-mcp-airs-webhook/README.md)
-(Prisma AIRS scans of MCP tool calls through the webhook).
+format and the test flow. The nested articles build on it: [`aigw-byo-guardrail-mcp/`](aigw-byo-guardrail-mcp/README.md)
+(the webhook as an MCP guardrail, with the probe MCP server), [`aigw-mcp-airs-webhook/`](aigw-mcp-airs-webhook/README.md)
+(Prisma AIRS scans of MCP tool calls through the webhook), [`aigw-mcp-descriptor-pinning/`](aigw-mcp-descriptor-pinning/README.md)
+(deny new or changed tool descriptors) and [`aigw-mcp-tiered-tool-access/`](aigw-mcp-tiered-tool-access/README.md)
+(per-group tool access with the `x-tool-policy` allowlist).
 
 ## What running this touches
 

@@ -23,6 +23,7 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 | [`aigw-byo-guardrail-mcp/`](aigw-byo-guardrail-mcp/README.md) | Companion article: this webhook as an MCP guardrail (`target: mcp_tools`), with the probe MCP server and `probe.sh`. Includes SaaS findings (MCP guardrails didn't run on 2026-10-13) and MCP integration gotchas |
 | [`aigw-mcp-airs-webhook/`](aigw-mcp-airs-webhook/README.md) | Companion article: Prisma AIRS scans of MCP tool calls (arguments and results) through this webhook, on a hybrid gateway |
 | [`aigw-mcp-descriptor-pinning/`](aigw-mcp-descriptor-pinning/README.md) | Companion article: deny MCP tools that are new on a server or whose descriptor changed since first seen, until approved |
+| [`aigw-mcp-tiered-tool-access/`](aigw-mcp-tiered-tool-access/README.md) | Companion article: different MCP tools for different user groups, using one server per tier, a JWT group gate, capabilities and this webhook's `x-tool-policy` allowlist, with `tierprobe.sh` |
 | `tests/` | `python3 -m unittest discover -s tests`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |
 
 Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a tenant selected (`airs-cli doctor` all green), `jq`, `curl`.

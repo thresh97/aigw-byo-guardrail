@@ -5,14 +5,14 @@ area: aigw
 type: behavior            # guide | behavior | capability | limitation | workaround | position
 status: verified          # verified | reported | stale | superseded | retracted
 visibility: public        # internal | public
-verified: 2026-10-14      # YYYY-MM-DD: date of the newest private evidence folder; empty if never tested
+verified: 2026-10-19      # YYYY-MM-DD: date of the newest private evidence folder; empty if never tested
 versions:                 # component: version, as confirmed by that evidence
   aigw-saas: as of 2026-10-13 (no version exposed)
-  aigw-image: 2.27.0
+  aigw-image: 2.27.0, 2.29.0
   aigw-chart: airs-gw-1.2.0
-related: [aigw-byo-guardrail]               # other article IDs
+related: [aigw-byo-guardrail, aigw-mcp-tiered-tool-access]               # other article IDs
 supersedes: []
 superseded_by:
-tags: [guardrail, webhook, byo-guardrail, mcp, mcp-gateway, saas, hybrid, static-headers, lambda, cache]
+tags: [guardrail, webhook, byo-guardrail, mcp, mcp-gateway, saas, hybrid, static-headers, lambda, cache, workspace, org-guardrail]
 ---
 Metadata for this article, read by `kb`, Obsidian Dataview and agents. The content is in [README.md](README.md).
