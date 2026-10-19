@@ -116,6 +116,7 @@ class Check(unittest.TestCase):
             self.assertIn("failing closed", reason)
             self.assertIn("airs_error", info)
             self.assertEqual(info["result"], "error")
+            self.assertIn("(no HTTP response)" if post.ret[0] is None else f"(HTTP {post.ret[0]})", reason)
 
     def test_errors_fail_open_when_set(self):
         v, reason, _ = airs.check(BEFORE, cfg(fail="open"), "k", Poster(403, None, "denied"))

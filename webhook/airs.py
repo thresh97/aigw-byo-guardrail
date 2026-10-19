@@ -153,7 +153,7 @@ def check(payload, cfg, key, poster=None):
     if err or not isinstance(res, dict) or res.get("action") not in ("allow", "block"):
         info.update(result="error", airs_error=err or f"unexpected response: {str(res)[:200]}")
         verdict = cfg["fail_open"]
-        return verdict, f"airs error (HTTP {status}), failing {'open' if verdict else 'closed'}: {info['airs_error']}", info
+        return verdict, f"airs error ({f'HTTP {status}' if status else 'no HTTP response'}), failing {'open' if verdict else 'closed'}: {info['airs_error']}", info
     info.update(result=res["action"], action=res["action"], category=res.get("category"), scan_id=res.get("scan_id"),
                 report_id=res.get("report_id"), detected={k: v for k in ("prompt_detected", "response_detected",
                                                                            "tool_detected") if (v := res.get(k))})
