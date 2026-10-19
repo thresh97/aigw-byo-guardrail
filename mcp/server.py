@@ -9,12 +9,16 @@ Tools:
   danger(action)  returns what it would have done (rules aimed at one tool)
   whoami()        returns the headers this server received, auth values redacted (what the gateway forwards upstream)
   get_page()      returns a web page with an indirect prompt injection in it (output-side content scans, e.g. AIRS)
+  add(a, b)       returns a+b as both content text (JSON, for backwards compatibility) and structuredContent (output
+                  schema validation)
 
 Auth: if env TOKEN is set, requests must carry it in x-mcp-token (the MCP integration's static headers).
 Every request is logged (method, tool, arguments, headers with auth values redacted).
 
 Optional modes, all off by default (env):
   EXTRA_TOOL      name of one more tool on every server (a vendor adding a tool: does an allowlist deny it?)
+  TOOL_DESCRIPTIONS  JSON {"<tool>": "<description>"}: replaces those tools' descriptions (a rug-pull: the descriptor
+                  changes after the server was approved; does descriptor pinning catch it?)
   JWT_SERVERS     comma list of servers (first path segment) that also require a user JWT in JWT_HEADER (default
                   authorization, "Bearer " optional), on top of x-mcp-token: the gateway forwards the user's token
                   (user_identity_forwarding bearer). RS256 only, verified against JWT_JWKS (inline JSON) or JWT_JWKS_URL;
@@ -26,6 +30,8 @@ Optional modes, all off by default (env):
   TOOL_AUTHZ      per-tool authz on a verified JWT: {"<tool>": [value, ...], "*": [...]}; the claim TOOL_CLAIM (default
                   groups) must hold one of the values. A tool not listed (and no "*") is denied. Applies only on JWT_SERVERS and
                   OAUTH_SERVERS. Unset: no per-tool check.
+  BAD_OUTPUT      non-empty: add's structuredContent violates its outputSchema ({"sum": "<string>", "extra": true}),
+                  to test a guardrail's output schema validation
 whoami adds the verified token's sub, azp, aud, groups, scope (never the token) as "_jwt".
 """
 
@@ -63,6 +69,14 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
 ]
 
+ADD_TOOL = {
+    "name": "add", "description": "Add two numbers.",
+    "inputSchema": {"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                    "required": ["a", "b"], "additionalProperties": False},
+    "outputSchema": {"type": "object", "properties": {"sum": {"type": "number"}},
+                     "required": ["sum"], "additionalProperties": False},
+}
+
 
 def csv_env(name):
     return {v.strip() for v in os.environ.get(name, "").split(",") if v.strip()}
@@ -72,6 +86,11 @@ EXTRA_TOOL = os.environ.get("EXTRA_TOOL", "")
 if EXTRA_TOOL:
     TOOLS = TOOLS + [{"name": EXTRA_TOOL, "description": "A tool the vendor added later.",
                       "inputSchema": {"type": "object", "properties": {}}}]
+TOOL_DESCRIPTIONS = json.loads(os.environ.get("TOOL_DESCRIPTIONS") or "{}")
+if TOOL_DESCRIPTIONS:
+    TOOLS = [{**t, "description": TOOL_DESCRIPTIONS.get(t["name"], t["description"])} for t in TOOLS]
+TOOLS = TOOLS + [ADD_TOOL]  # always last, regardless of EXTRA_TOOL/TOOL_DESCRIPTIONS
+BAD_OUTPUT = os.environ.get("BAD_OUTPUT", "")
 JWT_SERVERS, OAUTH_SERVERS = csv_env("JWT_SERVERS"), csv_env("OAUTH_SERVERS")
 JWT_HEADER = os.environ.get("JWT_HEADER", "authorization").lower()
 TOOL_AUTHZ = json.loads(os.environ.get("TOOL_AUTHZ") or "null")
@@ -148,25 +167,31 @@ def redact(headers):
 
 
 def call_tool(name, args, headers, claims=None):
-    """Return (text, is_error)."""
+    """Return (text, is_error, structured). structured is None except for tools with an outputSchema (add)."""
     if not tool_allowed(name, claims):
-        return f"forbidden: {name} needs {TOOL_CLAIM} in {TOOL_AUTHZ.get(name, TOOL_AUTHZ.get('*', []))}", True
+        return f"forbidden: {name} needs {TOOL_CLAIM} in {TOOL_AUTHZ.get(name, TOOL_AUTHZ.get('*', []))}", True, None
     if name == "echo":
-        return str(args.get("text", "")), False
+        return str(args.get("text", "")), False, None
     if name == "get_canary":
-        return CANARY, False
+        return CANARY, False, None
     if name == "danger":
-        return f"would have performed: {args.get('action', '')}", False
+        return f"would have performed: {args.get('action', '')}", False, None
     if name == "whoami":
         seen = redact(headers)
         if claims is not None:
             seen["_jwt"] = {k: claims.get(k) for k in ("sub", "azp", "aud", "groups", "scope", "preferred_username")}
-        return json.dumps(seen), False
+        return json.dumps(seen), False, None
     if name == "get_page":
-        return POISONED_PAGE, False
+        return POISONED_PAGE, False, None
+    if name == "add":
+        a, b = args.get("a", 0), args.get("b", 0)
+        if not all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in (a, b)):
+            return "add: a and b must be numbers", True, None
+        structured = {"sum": "<string>", "extra": True} if BAD_OUTPUT else {"sum": a + b}
+        return json.dumps(structured["sum"]), False, structured
     if name == EXTRA_TOOL:
-        return f"{EXTRA_TOOL} ran", False
-    return f"unknown tool: {name}", True
+        return f"{EXTRA_TOOL} ran", False, None
+    return f"unknown tool: {name}", True, None
 
 
 def rpc(msg, server, headers, claims=None):
@@ -186,8 +211,10 @@ def rpc(msg, server, headers, claims=None):
     elif method == "tools/list":
         result = {"tools": TOOLS}
     elif method == "tools/call":
-        text, is_error = call_tool(params.get("name"), params.get("arguments") or {}, headers, claims)
+        text, is_error, structured = call_tool(params.get("name"), params.get("arguments") or {}, headers, claims)
         result = {"content": [{"type": "text", "text": text}], "isError": is_error}
+        if structured is not None:
+            result["structuredContent"] = structured
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
     return {"jsonrpc": "2.0", "id": mid, "result": result}

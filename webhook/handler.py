@@ -22,8 +22,15 @@ policy lives in the guardrail config and edits need no Lambda or MCP integration
   from metadata.mcpToolName. A "<workspace>/<slug>" key wins over a bare slug. Anything not listed is denied, and so is a
   server missing from the policy, a request without MCP metadata and a malformed policy. No header: the rule is off.
   Never list x-tool-policy in the guardrail's forwardHeaders (a client could then send its own policy).
+MCP tool descriptor pinning (env PIN and PIN_HEADERS; off when PIN is unset): runs after the rules above pass. A tool that
+is new on its server, or whose descriptor changed since it was first seen, is denied until approved. Optionally it also
+scans descriptors with Prisma AIRS (env AIRS_LIST_API_KEY; blocked tools never join the baseline), learns new servers for
+a while, and checks arguments and structuredContent against the pinned schemas. Config: pin.py.
 Prisma AIRS scan of MCP tool calls (env AIRS and AIRS_API_KEY; off when AIRS is unset): runs after the rules above pass,
 and an AIRS block denies. Config and behavior: airs.py.
+Response data (the gateway shows it as responseData in the check result): reason, stage (the check that decided: policy,
+tools, pin or airs), elapsed_ms (time spent in the webhook), and with AIRS an airs object: result (allow, block or
+error), scan_id, report_id, category, airs_status, airs_error, latency_ms and the other AIRS_DATA fields, never content.
 Auth: the gateway must send env TOKEN in x-guardrail-token (set in the guardrail's headers).
 Every call logs the received header names (values of auth headers are dropped) so you can see
 what the gateway actually forwards. Env LOG_PAYLOAD=1 also logs the request and response objects (prompt, tool
@@ -37,8 +44,10 @@ import json
 import logging
 import os
 import re
+import time
 
 import airs
+import pin
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -123,6 +132,13 @@ def evaluate_tools(raw, metadata):
 POLICY = load_policy(os.environ.get("POLICY"))
 LOG_PAYLOAD = os.environ.get("LOG_PAYLOAD", "") in ("1", "true")
 AIRS = airs.load_config(os.environ.get("AIRS"))
+PIN = pin.load_config(os.environ.get("PIN"))
+PIN_HEADERS = pin.headers_from_env() if PIN else {}
+
+
+# AIRS fields returned in data.airs (the gateway shows them as responseData.airs); never content
+AIRS_DATA = ("result", "hook", "tool", "profile", "action", "category", "scan_id", "report_id", "detected",
+             "airs_status", "airs_error", "latency_ms", "truncated")
 
 
 def respond(status, body):
@@ -130,7 +146,8 @@ def respond(status, body):
 
 
 def handler(event, context):
-    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+    t0 = time.monotonic()
+    headers ={k.lower(): v for k, v in (event.get("headers") or {}).items()}
     if not hmac.compare_digest(headers.get(TOKEN_HEADER, ""), os.environ.get("TOKEN", "")):
         log.warning("rejected: bad or missing %s", TOKEN_HEADER)
         return respond(401, {"error": "unauthorized"})
@@ -143,26 +160,40 @@ def handler(event, context):
     except ValueError:
         payload = {}
 
+    stage = "policy"
     verdict, reason = evaluate(headers, POLICY)
     if verdict and TOOL_POLICY_HEADER in headers:
+        stage = "tools"
         verdict, reason = evaluate_tools(headers[TOOL_POLICY_HEADER], payload.get("metadata"))
-    scan = None
+    pinned = scan = None
+    if verdict and PIN:
+        stage = "pin"
+        verdict, reason, pinned = pin.check(payload, PIN, PIN_HEADERS)
     if verdict and AIRS:
+        stage = "airs"
         verdict, reason, scan = airs.check(payload, AIRS, os.environ.get("AIRS_API_KEY"))
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
     entry = {
         "verdict": verdict,
         "reason": reason,
+        "stage": stage,
+        "elapsed_ms": elapsed_ms,
         "eventType": payload.get("eventType"),
         "requestType": payload.get("requestType"),
         "provider": payload.get("provider"),
         "metadata": payload.get("metadata"),
         "headers": {k: ("<redacted>" if k in SECRET_HEADERS else v) for k, v in sorted(headers.items())},
     }
+    if pinned:
+        entry["pin"] = pinned
     if scan:
         entry["airs"] = scan
     if LOG_PAYLOAD:
         entry["payload_keys"] = sorted(payload)
         entry["request"] = payload.get("request")
         entry["response"] = payload.get("response")
-    log.info(json.dumps(entry))
-    return respond(200, {"verdict": verdict, "data": {"reason": reason}})
+    (log.warning if scan and scan.get("result") == "error" else log.info)(json.dumps(entry))
+    data = {"reason": reason, "stage": stage, "elapsed_ms": elapsed_ms}
+    if scan and scan.get("result"):
+        data["airs"] = {k: scan[k] for k in AIRS_DATA if scan.get(k) not in (None, [], {})}
+    return respond(200, {"verdict": verdict, "data": data})

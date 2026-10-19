@@ -28,7 +28,10 @@ class Handler(unittest.TestCase):
         self.assertEqual(call({k: v for k, v in OK.items() if k != "x-guardrail-token"})[0], 401)
 
     def test_allowed_ip(self):
-        self.assertEqual(call(OK), (200, {"verdict": True, "data": {"reason": "ok"}}))
+        status, b = call(OK)
+        self.assertEqual((status, b["verdict"], b["data"]["reason"], b["data"]["stage"]), (200, True, "ok", "policy"))
+        self.assertIsInstance(b["data"]["elapsed_ms"], int)
+        self.assertNotIn("airs", b["data"])
 
     def test_ip_outside_allowlist(self):
         _, b = call({**OK, "cf-connecting-ip": "8.8.8.8"})

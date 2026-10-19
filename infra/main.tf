@@ -34,6 +34,14 @@ data "archive_file" "webhook" {
     content  = file("${path.module}/../webhook/airs.py")
     filename = "airs.py"
   }
+  source { # imported by handler.py; descriptor pinning itself refuses to run on Lambda (no shared state file)
+    content  = file("${path.module}/../webhook/pin.py")
+    filename = "pin.py"
+  }
+  source { # imported by pin.py
+    content  = file("${path.module}/../webhook/schema.py")
+    filename = "schema.py"
+  }
 }
 
 resource "aws_iam_role" "webhook" {

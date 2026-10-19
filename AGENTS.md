@@ -59,7 +59,10 @@ format and the test flow. The two nested articles build on it: [`aigw-byo-guardr
 - `webhook/` and `mcp/` are stdlib-only Python; shell scripts are bash with `set -euo pipefail`. Keep it that way: no
   new dependencies, so the Lambda zip and the k8s ConfigMap stay plain source files.
 - A new file under `webhook/` has to be added in three places: the `archive_file` sources in `infra/main.tf`, the code
-  ConfigMap in `k8s/webhook.sh`, and the README's file table.
+  ConfigMap in `k8s/webhook.sh`, and the README's file table. Exception: `pinctl.py` isn't in the Lambda zip, and
+  `PIN` has no Terraform variable, since descriptor pinning refuses to run on Lambda (no shared state file).
+- Descriptor pinning keeps state in a file (`PIN` `store`, default `/data/pins.json`). Deleting it, or a pod losing its
+  emptyDir, resets every server to trust on first use. Treat it like the other tenant data: never commit it.
 - New webhook settings go in env, documented in the module docstring, `infra/variables.tf`, `k8s/webhook.sh` and the
   article that uses them.
 - Run `python3 -m unittest discover -s tests` before committing; the AIRS tests use a fake poster and never call AIRS.

@@ -151,10 +151,10 @@ def check(payload, cfg, key, poster=None):
         status, res, err = (poster or post)(cfg["url"], key, body, cfg["timeout"])
     info.update(airs_status=status, latency_ms=int((time.monotonic() - t) * 1000), profile=body["ai_profile"]["profile_name"])
     if err or not isinstance(res, dict) or res.get("action") not in ("allow", "block"):
-        info["airs_error"] = err or f"unexpected response: {str(res)[:200]}"
+        info.update(result="error", airs_error=err or f"unexpected response: {str(res)[:200]}")
         verdict = cfg["fail_open"]
         return verdict, f"airs error (HTTP {status}), failing {'open' if verdict else 'closed'}: {info['airs_error']}", info
-    info.update(action=res["action"], category=res.get("category"), scan_id=res.get("scan_id"),
+    info.update(result=res["action"], action=res["action"], category=res.get("category"), scan_id=res.get("scan_id"),
                 report_id=res.get("report_id"), detected={k: v for k in ("prompt_detected", "response_detected",
                                                                            "tool_detected") if (v := res.get(k))})
     if res["action"] == "block":

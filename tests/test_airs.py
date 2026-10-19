@@ -115,6 +115,7 @@ class Check(unittest.TestCase):
             self.assertFalse(v, reason)
             self.assertIn("failing closed", reason)
             self.assertIn("airs_error", info)
+            self.assertEqual(info["result"], "error")
 
     def test_errors_fail_open_when_set(self):
         v, reason, _ = airs.check(BEFORE, cfg(fail="open"), "k", Poster(403, None, "denied"))
@@ -142,7 +143,23 @@ class HandlerWiring(unittest.TestCase):
         try:
             orig, handler.airs.post = handler.airs.post, Poster(res=BLOCK)
             r = handler.handler({"headers": {"x-guardrail-token": "t0ken"}, "body": json.dumps(BEFORE)}, None)
-            self.assertFalse(json.loads(r["body"])["verdict"])
+            b = json.loads(r["body"])
+            self.assertFalse(b["verdict"])
+            self.assertEqual(b["data"]["stage"], "airs")
+            a = b["data"]["airs"]
+            self.assertEqual((a["result"], a["scan_id"], a["report_id"], a["category"], a["airs_status"]),
+                             ("block", "s2", "r2", "malicious", 200))
+            self.assertIn("latency_ms", a)
+            self.assertNotIn("truncated", a)
+            self.assertNotIn("naïve", r["body"])  # no tool arguments or results in the response
+            handler.airs.post = Poster(None, None, "TimeoutError: timed out")
+            with self.assertLogs(level="WARNING"):
+                r = handler.handler({"headers": {"x-guardrail-token": "t0ken"}, "body": json.dumps(BEFORE)}, None)
+            a = json.loads(r["body"])["data"]["airs"]
+            self.assertEqual((a["result"], a["airs_error"]), ("error", "TimeoutError: timed out"))
+            self.assertNotIn("airs_status", a)
+            r = handler.handler({"headers": {"x-guardrail-token": "t0ken"}, "body": json.dumps(LLM)}, None)
+            self.assertNotIn("airs", json.loads(r["body"])["data"])
             r = handler.handler({"headers": {"x-guardrail-token": "nope"}, "body": json.dumps(BEFORE)}, None)
             self.assertEqual(r["statusCode"], 401)
         finally:

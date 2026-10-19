@@ -17,9 +17,12 @@ client ──► AI Gateway (SaaS) ──► LLM provider
 | `infra/` | Terraform for the Lambda, its Function URL, IAM, the log group and the token |
 | `mcp/server.py`, `infra/mcp.tf` | Optional probe MCP server for MCP guardrail tests (`mcp_server = true`): Streamable HTTP, stateless, tools `echo`, `get_canary`, `danger`, `whoami`, `get_page` (a result with a hidden prompt injection); `/a/mcp` and `/b/mcp` act as two servers; static header `x-mcp-token`. Optional modes via `mcp_env` (see the docstring): an extra tool, a forwarded user JWT checked per server with per-tool authz on a claim, an OAuth 2.1 protected-resource server |
 | `webhook/airs.py` | Optional Prisma AIRS scan of MCP tool calls (arguments and results), on when env `AIRS` is set; see [`aigw-mcp-airs-webhook/`](aigw-mcp-airs-webhook/README.md) |
+| `webhook/pin.py`, `webhook/pinctl.py` | Optional MCP tool descriptor pinning (rug-pull detection), on when env `PIN` is set, and its admin CLI; see [`aigw-mcp-descriptor-pinning/`](aigw-mcp-descriptor-pinning/README.md). Docker and Kubernetes only (it needs one persistent state file) |
 | `webhook/server.py`, `k8s/webhook.sh` | The same handler as a plain HTTP server, deployed to Kubernetes (stock python image, code in a ConfigMap). Unlike a Function URL it passes the full `x-forwarded-for` chain through (see Findings, hybrid) |
+| `k8s/mcp.sh` | The probe MCP server (`mcp/server.py`) as a Deployment and Service in the gateway's cluster, with its test modes (`EXTRA_TOOL`, `TOOL_DESCRIPTIONS`, ...) switched by `env` |
 | [`aigw-byo-guardrail-mcp/`](aigw-byo-guardrail-mcp/README.md) | Companion article: this webhook as an MCP guardrail (`target: mcp_tools`), with the probe MCP server and `probe.sh`. Includes SaaS findings (MCP guardrails didn't run on 2026-10-13) and MCP integration gotchas |
 | [`aigw-mcp-airs-webhook/`](aigw-mcp-airs-webhook/README.md) | Companion article: Prisma AIRS scans of MCP tool calls (arguments and results) through this webhook, on a hybrid gateway |
+| [`aigw-mcp-descriptor-pinning/`](aigw-mcp-descriptor-pinning/README.md) | Companion article: deny MCP tools that are new on a server or whose descriptor changed since first seen, until approved |
 | `tests/` | `python3 -m unittest discover -s tests`; `e2e.sh` (wire, ask, policy, down/up, logs, teardown through a real gateway) and `cases.sh` (the full case matrix behind the Findings). Every request carries a readable `x-portkey-trace-id` (`<run>-<case>`) and `x-portkey-metadata` (run, case, guardrail, what it expects), so the gateway's logs explain themselves |
 
 Needs: Terraform ≥ 1.5, AWS credentials, [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with a tenant selected (`airs-cli doctor` all green), `jq`, `curl`.
@@ -101,7 +104,7 @@ A 446 response carries the reason from the webhook:
 
 ```bash
 ask -H 'x-app: probe-blockme' >/dev/null   # or capture the full body and:
-# jq '.hook_results.before_request_hooks[0].checks[0].data.responseData'   ->  {"reason": "x-app matches deny 'blockme'"}
+# jq '.hook_results.before_request_hooks[0].checks[0].data.responseData'   ->  {"reason": "x-app matches deny 'blockme'", "stage": "policy", "elapsed_ms": 0}
 ```
 
 To prove IP enforcement from an allowed network, add your own egress range to `deny_cidrs`, `apply`, and re-run `ask`. Every request gets a 446 with `cf-connecting-ip=<your ip> in deny_cidrs`. Remove the range and `apply` again.

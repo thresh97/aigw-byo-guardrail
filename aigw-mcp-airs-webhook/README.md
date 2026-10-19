@@ -139,9 +139,26 @@ GW=https://<gateway>/m/<workspace-slug> KEY=<gateway API key> A=<server slug> \
 | `a-inject` (prompt injection in the argument) | JSON-RPC `-32446`; the tool never runs; one AIRS scan, `block` on input |
 | `a-page` (injection in the tool result) | `-32446` after the call; AIRS `block` on output |
 | webhook stopped, `failOnError: true` | `-32446`, with the reason `Webhook error: ...` |
-| AIRS key revoked, `fail: closed` | `-32446`; the webhook logs `airs_status: 403` |
+| AIRS key revoked, `fail: closed` | `-32446`; `responseData.airs` has `result: error` and `airs_status: 403`, and the webhook logs it at WARN |
 
-When AIRS blocks, the client sees only "default.webhook: Webhook request failed" as the reason. The webhook logs one JSON line per hook, with the verdict, the reason and an `airs` object: `hook`, `tool`, `server`, `profile`, `action`, `category`, `scan_id`, `report_id`, `detected`, `airs_status`, `latency_ms` and `truncated`. Use the `scan_id` to find the scan in AIRS. Arguments and results are logged only with `LOG_PAYLOAD=1`.
+### Troubleshooting a deny
+
+When the webhook denies, the client sees only "default.webhook: Webhook request failed" as the reason. The gateway writes that explanation whenever the webhook answered HTTP 200 with `verdict: false`. Problems reaching the webhook look different: a timeout is "Webhook error: Request timed out after <timeout>ms", and a non-2xx is "Webhook error: HTTP error! status: <code>" with a `responseStatus`.
+
+The webhook's answer is in the gateway's check result for the hook, under `data.responseData`:
+
+```json
+{"reason": "airs block (malicious) on output of get_page, scan_id 1f0c…", "stage": "airs", "elapsed_ms": 287,
+ "airs": {"result": "block", "hook": "output", "tool": "get_page", "profile": "mcp-tool-response", "action": "block",
+          "category": "malicious", "scan_id": "1f0c…", "report_id": "R1f0c…", "detected": {"tool_detected": {…}},
+          "airs_status": 200, "latency_ms": 251}}
+```
+
+- `stage` is the check that decided: `policy`, `tools`, `pin` or `airs`.
+- `airs.result` tells an AIRS block (`block`) from an AIRS failure (`error`, with `airs_error` and `airs_status`, denied because `fail` is `closed`). Use the `scan_id` to find the scan in AIRS.
+- Timing: `elapsed_ms` is the time spent in the webhook and `airs.latency_ms` the AIRS call. Compare them with the check's `timeout` and the gateway's `execution_time` for the check. If `execution_time` is much larger than `elapsed_ms`, the time went on the network or a queue in front of the webhook. If `latency_ms` is near `timeout_ms`, AIRS is timing out and failing closed.
+
+The response never carries arguments or results. The webhook also logs one JSON line per hook with the same fields, plus `server` and the header names it received. Arguments and results are logged only with `LOG_PAYLOAD=1`.
 
 ## 5. Teardown
 

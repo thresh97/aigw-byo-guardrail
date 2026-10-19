@@ -40,12 +40,33 @@ class McpServer(unittest.TestCase):
 
     def test_tools(self):
         _, b = call({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        self.assertEqual([t["name"] for t in b["result"]["tools"]], ["echo", "get_canary", "danger", "whoami", "get_page"])
+        self.assertEqual([t["name"] for t in b["result"]["tools"]],
+                         ["echo", "get_canary", "danger", "whoami", "get_page", "add"])
         _, b = call({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                      "params": {"name": "echo", "arguments": {"text": "hi"}}})
         self.assertEqual(b["result"], {"content": [{"type": "text", "text": "hi"}], "isError": False})
         _, b = call({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "get_canary"}})
         self.assertEqual(b["result"]["content"][0]["text"], server.CANARY)
+        self.assertNotIn("structuredContent", b["result"])
+
+    def test_add(self):
+        _, b = call({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                     "params": {"name": "add", "arguments": {"a": 2, "b": 3.5}}})
+        self.assertEqual(b["result"], {"content": [{"type": "text", "text": "5.5"}], "isError": False,
+                                       "structuredContent": {"sum": 5.5}})
+
+    def test_add_rejects_non_numbers(self):
+        _, b = call({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                     "params": {"name": "add", "arguments": {"a": "x", "b": True}}})
+        self.assertEqual(b["result"], {"content": [{"type": "text", "text": "add: a and b must be numbers"}],
+                                       "isError": True})
+
+    def test_add_bad_output(self):
+        with mock.patch.object(server, "BAD_OUTPUT", "1"):
+            _, b = call({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                        "params": {"name": "add", "arguments": {"a": 2, "b": 3}}})
+        self.assertEqual(b["result"]["structuredContent"], {"sum": "<string>", "extra": True})
+        self.assertFalse(b["result"]["isError"])
 
     def test_whoami_redacts(self):
         _, b = call({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "whoami"}},
