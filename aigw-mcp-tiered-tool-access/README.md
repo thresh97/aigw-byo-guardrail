@@ -1,6 +1,6 @@
 # aigw-mcp-tiered-tool-access
 
-The AIRS AI Gateway has no per-user tool permissions for MCP. A guardrail webhook gets no verified user identity (see `aigw-byo-guardrail-mcp`), so it can't decide per user. The workaround is to turn each access tier into its own MCP server, each pointing at the same upstream, with layered controls on each server:
+Per-user tool permissions for MCP are available through the AIRS AI Gateway's [Agent Identity Security](https://www.paloaltonetworks.com/ai-security/agent-identity-security) (AIS) integration with IDIRA, which this article doesn't cover or test. Without it, the gateway's own controls are per server, and a guardrail webhook gets no verified user identity (see `aigw-byo-guardrail-mcp`), so it can't decide per user. The workaround for that case is to turn each access tier into its own MCP server, each pointing at the same upstream, with layered controls on each server:
 
 - a JWT group gate decides who may reach the server (`aigw-mcp-jwt-validation`);
 - the server's capabilities decide which tools exist there;
@@ -14,7 +14,7 @@ Tested on the hybrid gateway 2.27.0 (2026-10-14) and 2.29.0 (2026-10-15), unifie
 
 You need this when different groups of users should see different tools of one MCP backend through the gateway, for example read-only tools for everyone and write tools for one team, and:
 
-- the gateway offers per-server access (workspace grants, per-server JWT validation) but nothing per tool and per user;
+- you're not using the Agent Identity Security (IDIRA) integration, so the gateway's controls are per server (workspace grants, per-server JWT validation), not per tool and per user;
 - a guardrail webhook on MCP tool calls gets the server, workspace and tool name, but no verified user claims, so a per-user rule there would trust client-controlled data.
 
 ## Workaround
