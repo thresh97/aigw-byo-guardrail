@@ -17,6 +17,10 @@ format and the test flow. The nested articles build on it: [`aigw-byo-guardrail-
 - **Kubernetes** (`k8s/webhook.sh`): a Deployment, Service, Secrets (`$NAME`, `$NAME-airs`) and ConfigMaps
   (`$NAME-code`, `$NAME-policy`) in `$K8S_NAMESPACE`. `delete` removes exactly those. Check that `NAME` doesn't clash
   with something already in the namespace.
+- **Docker** (`docker/mcp.sh`): a probe MCP server container with network aliases on the gateway's Compose network. A
+  webhook container needs a volume on `/data` for the pin state. Changing the gateway's environment means a
+  `docker-compose.override.yml` and a gateway recreate (the installer ignores extra `values.yaml` keys). Check `NAME`
+  against existing containers.
 - **SCM tenant** (`tests/e2e.sh wire`): guardrails, configs and service keys named `$PREFIX-closed` / `$PREFIX-open`
   (default prefix `byo-probe`) in `$WS_ID`. Their ids and key secrets go to `$STATE` (default
   `~/.local/state/aigw-byo-guardrail`), which `teardown` reads; don't delete it before teardown. The MCP articles also
@@ -48,13 +52,33 @@ format and the test flow. The nested articles build on it: [`aigw-byo-guardrail-
 - **Report what you observe.** A result counts only if the webhook log or the gateway response shows it. If a claim
   comes from docs or code reading rather than a run, say so.
 
+## Descriptor pinning (`aigw-mcp-descriptor-pinning`)
+
+- **More secrets.** `PIN_HEADERS` holds a gateway key and `AIRS_LIST_API_KEY` is an AIRS key: never print the webhook's
+  environment or `docker inspect` output. With `PIN.airs` on, tool descriptions are sent to AIRS.
+- **Read the webhook log.** The client only sees `Webhook request failed` (JSON-RPC `-32446`). The reason (`pin_drift`
+  kind `changed`, `new` or `airs-blocked`, or "penalty box") is only in the webhook log. A denial isn't understood until
+  you've read it there.
+- **Trust on first use baselines whatever the server serves on the first call.** Inspect `tools/list` before pointing
+  pinning at a server you didn't deploy. Don't run `pinctl approve` to make a test pass on a server someone else owns;
+  approving is the operator's decision. This repo hasn't shown that `approve --hash` is enforced, so don't claim it.
+- **Timing.** The webhook re-reads descriptors every `refresh_s` (default 30): wait longer than that after changing the
+  probe, or the call is judged against the old list.
+- **Workspace defaults.** Whether `workspaces update --defaults` merges with or replaces existing `defaults` is untested.
+  Read the workspace's current `defaults` and save them before setting `mcp_input_guardrails`, and put them back at the
+  end. A default takes effect without an integration re-save (unlike a mapping).
+- **Pin state.** Don't delete `/data/pins.json` or the volume on a deployment you didn't create: it resets every server to
+  trust on first use.
+
 ## Cleanup (always finish with this)
 
-1. Remove MCP guardrail mappings or workspace defaults you set, and re-save the integration.
+1. Remove MCP guardrail mappings you set and re-save the integration. Restore any workspace defaults you changed (no
+   re-save needed).
 2. `bash tests/e2e.sh teardown` (same `PREFIX`, `STATE` and `MODES` as `wire`); delete any MCP integrations, guardrails
    and keys you created by hand.
-3. Revert `TRUSTED_CUSTOM_HOSTS` if you changed it.
-4. `bash k8s/webhook.sh delete` and/or `terraform -chdir=infra destroy`, unless the operator wants it kept.
+3. Revert `TRUSTED_CUSTOM_HOSTS` (the Compose override on Docker) if you changed it.
+4. `bash k8s/webhook.sh delete`, `bash docker/mcp.sh delete` (plus the webhook container and its volume) and/or
+   `terraform -chdir=infra destroy`, unless the operator wants it kept.
 
 ## Changing the code
 
