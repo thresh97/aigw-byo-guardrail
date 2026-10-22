@@ -5,9 +5,9 @@ area: aigw
 type: workaround            # guide | behavior | capability | limitation | workaround | position
 status: verified          # verified | reported | stale | superseded | retracted
 visibility: public        # internal | public
-verified: 2026-10-17      # YYYY-MM-DD: date of the newest private evidence folder; empty if never tested
+verified: 2026-10-22      # YYYY-MM-DD: date of the newest private evidence folder; empty if never tested
 versions:                 # component: version, as confirmed by that evidence
-  aigw-image: 2.29.0 (hybrid, chart airs-gw-1.2.0, unified mode; live run 2026-10-16)
+  aigw-image: 2.29.0 (hybrid, chart airs-gw-1.2.0, unified mode; live run 2026-10-16; Docker with airs-ai-gateway-docker 0.2.0, run 2026-10-22)
   webhook: k8s/webhook.sh on python:3.12-slim, and a local run against the probe MCP server (2026-10-16)
   airs: Prisma AIRS sync scan API (v1/scan/sync/request), airs-cli 7.2.0 (2026-10-17)
 source:                   # required when status is reported: where the claim came from

@@ -88,6 +88,23 @@ bash k8s/webhook.sh pinctl list
 
 Without `PIN_PVC`, the state is on an emptyDir and is lost whenever the pod is replaced (including `policy`, `down` and redeploys). Every server is then trusted on first use again, so use a PVC beyond a quick test.
 
+**With the gateway in Docker** ([`airs-ai-gateway-docker`](https://github.com/PaloAltoNetworks/airs-ai-gateway-docker)), run the webhook on the installer's Compose network (`--network airs-ai-gateway-docker_default` on the `docker run` above, `-p` isn't needed) and point `PIN` at the gateway container's MCP listener. That's port 8788 (`MCP_PORT`), not the inference port 8787, and plain HTTP inside the network:
+
+```
+PIN={"url":"http://airs-gw-gateway:8788/m/{workspace}/{server}/mcp","quarantine":"tool"}
+```
+
+The gateway refuses private upstreams, so two hosts go in its `TRUSTED_CUSTOM_HOSTS` (comma-separated): the webhook (`mcp-pin-webhook`) and each MCP server's host. The installer rewrites `.env.runtime` and doesn't copy extra keys from `values.yaml`, so set it in a `docker-compose.override.yml` next to the generated compose file, which survives re-runs, and recreate the gateway (`docker compose up -d airs-gw-gateway`):
+
+```yaml
+services:
+  airs-gw-gateway:
+    environment:
+      TRUSTED_CUSTOM_HOSTS: mcp-pin-webhook,byo-probe-mcp.default.svc.cluster.local
+```
+
+Without the MCP server's host, the first `initialize` through the gateway fails with HTTP 500 "Failed to restore session", and the reason is only in the gateway log (`SSRF block: DNS resolution rejected`).
+
 ## 2. Create the guardrail
 
 Create and map the guardrail as in [`aigw-mcp-airs-webhook`](../aigw-mcp-airs-webhook/README.md) step 3, with these points:
@@ -96,7 +113,9 @@ Create and map the guardrail as in [`aigw-mcp-airs-webhook`](../aigw-mcp-airs-we
 - A check `timeout` above 3 × `timeout_ms`, plus the AIRS timeout if AIRS is on (10000 ms covers the defaults without AIRS; use 15000 with it).
 - Input only is enough for pinning (the decision is made before the tool runs). Map output too if AIRS scans results.
 - An empty `mcp_integration_capability_ids` (all tools), so tools the server adds later still reach the webhook. With an explicit list, a new tool bypasses the guardrail entirely.
-- Or make it the workspace's default MCP input guardrail, which covers every server in the workspace.
+- Or make it the workspace's default MCP input guardrail, which covers every server in the workspace. With `airs-cli` that's one command and needs no SCM token for the mapping call: `airs-cli aigateway workspaces update <workspace slug> --defaults '{"mcp_input_guardrails":["<guardrail id>"]}'`. Check the workspace's current `defaults` first (`airs-cli aigateway workspaces get <workspace slug>`): the test ran on a workspace with none, so whether the update merges with or replaces existing keys wasn't tested.
+
+To register the probe server as the MCP integration with `airs-cli`: `airs-cli aigateway mcp integrations create --name <name> --slug <slug> --organisation-id <tsg> --auth-type none --transport http --url <url> --configurations '{}' --secret-mappings '[]'`, then `airs-cli aigateway mcp integrations workspaces set <integration id> --workspace-binding <workspace id>=true --force`. The URL must have a dotted host that isn't `.local`: `http://byo-probe-mcp:8080/...` is refused with "Invalid value" and `http://x.mcp.local:8080/...` with "Invalid or unsafe custom host". The `<name>.<namespace>.svc.cluster.local` form was accepted (on Docker, as a network alias on the container).
 
 ## 3. Onboard a server
 
@@ -168,6 +187,17 @@ bash k8s/mcp.sh env TOOL_DESCRIPTIONS- EXTRA_TOOL=sync_notes   # revert it, add 
 ```
 
 The call should fail with `-32446`, and the webhook log should show `pin_drift`.
+
+With the gateway in Docker, [`docker/mcp.sh`](../docker/mcp.sh) does the same for the probe server (`deploy` recreates the container, so pass every mode you want each time), and [`probe.sh`](../aigw-byo-guardrail-mcp/probe.sh) can call through the gateway's published MCP port:
+
+```bash
+bash docker/mcp.sh deploy                                # register the printed URL as the MCP integration
+bash docker/mcp.sh deploy 'TOOL_DESCRIPTIONS={"echo":"..."}'   # rug pull
+bash docker/mcp.sh deploy EXTRA_TOOL=sync_notes          # revert it, add a tool
+docker logs mcp-pin-webhook | grep -E 'pin_drift|"verdict": false'
+```
+
+The client only sees `-32446` with `default.webhook: Webhook request failed`; `pin_drift` (`changed`, `new`, `airs-blocked`) and the `penalty box` reason are in the webhook's log.
 
 ## 6. AIRS descriptor scans, learning mode and schema validation
 
@@ -243,7 +273,14 @@ AIRS descriptor scans, learning mode and schema validation were tested 2026-10-1
 - **Scan format:** for a `tools/list` tool event, AIRS parses `output` as a JSON array of tools. Plain text and `{"tools": [...]}` got HTTP 400 ("failed to parse tools list"). With the array, the response has a `tool_detected` entry per tool (`tool_invoked`, `detections.injection`, `threats: ["context poisoning"]`), and a whole `tools/list` can go in one scan with a verdict per tool. The same text sent as a `tools/call` output was accepted, but scored like `prompt`.
 - **Detection:** with a profile that has only prompt injection on (in the `prompt` and `tool-response` sections), `tool_event` scans blocked the poisoned test descriptors (an `<IMPORTANT>` override and a parameter description telling the model to read a key file) at first sight and in learning mode, and they went to the penalty box as `airs-blocked`. Benign probe tools such as `echo`, `whoami` and `get_page` were allowed. Verdicts were the same across repeated scans. `tool_event` is the default because it's the native format and gave the cleanest results in our comparison with `prompt`.
 
-Not tested: `require_seed` and a PVC on the live gateway, the webhook reaching the gateway's public URL from inside the cluster, the corrected `tool_event` format through the live gateway (the gateway path didn't change; only the scan request did), SaaS, and servers with per-user authentication.
+Tested 2026-10-22 on a hybrid gateway 2.29.0 in Docker, installed with `airs-ai-gateway-docker` 0.2.0 (the webhook and the probe server as containers on the installer's network, the state on a named volume, AIRS on a flat profile with prompt injection and toxic content set to block, the guardrail as the workspace's default MCP input guardrail):
+
+- **Pinning:** the first call fetched `tools/list` through the gateway's MCP listener (`http://<gateway service>:8788/m/...`) and pinned the baseline. A changed `echo` description was denied as `changed` about 35 s later (`refresh_s` 30) while `whoami` stayed allowed, `echo` stayed denied after the description was reverted, and a new `sync_notes` was denied as `new`. `pinctl approve` released `echo`; that run passed an empty `--hash`, so it doesn't show that the hash check is enforced (the local test above covers it).
+- **AIRS on the flat profile:** the corrected `tool_event` descriptor scan blocked the probe's `danger` tool at first sight (`tool.injection`, `tool.toxic_content`, `context poisoning`), so it was never pinned and its calls were denied as `airs-blocked`. The five other descriptors were allowed. The `tool_event` scan of a call's arguments (`input`, no `tool-call` section in the profile) was accepted and allowed a benign `echo`, with no HTTP 400. Tool results (`output`) and an injection in the arguments weren't tested on this setup.
+- **Default guardrail:** the first call after setting the workspace default was already guarded, with no integration re-save.
+- **Set-up:** the gateway's SSRF policy and the control plane's URL validation each blocked the probe server until its host was trusted and had a dotted, non-`.local` name (see step 1 and 2). The state volume wasn't restarted.
+
+Not tested: `require_seed` and a PVC on a live Kubernetes gateway, a restart of the Docker state volume, the webhook reaching the gateway's public URL from inside the cluster, SaaS, and servers with per-user authentication.
 
 ## License
 

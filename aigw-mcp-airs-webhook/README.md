@@ -31,7 +31,7 @@ AIRS reports these detections under `tool_detected`, not under `prompt_detected`
   - **Lambda** (`infra/`): a public HTTPS URL, so the gateway needs no allowlist entry. Needs Terraform and AWS credentials.
   - **Docker** on a host the gateway can reach: the stock `python:3.12-slim` image, nothing to build.
   - **Kubernetes** (`k8s/webhook.sh`): next to an EKS, AKS or GKE gateway.
-- For Docker or Kubernetes, the webhook's host in the gateway's `TRUSTED_CUSTOM_HOSTS`. Without it, the gateway refuses webhook URLs on private addresses and internal names (see article `aigw-private-hosts`). With the `airs-ai-gateway-docker` installer, add the variable to `.env.runtime` by hand: the installer doesn't copy extra `environment.data` keys there.
+- For Docker or Kubernetes, the webhook's host in the gateway's `TRUSTED_CUSTOM_HOSTS`. Without it, the gateway refuses webhook URLs on private addresses and internal names (see article `aigw-private-hosts`). With the `airs-ai-gateway-docker` installer, the installer doesn't copy extra `environment.data` keys into `.env.runtime`, and rewrites that file on each run. Set the variable in a `docker-compose.override.yml` next to the generated compose file (`services: airs-gw-gateway: environment: TRUSTED_CUSTOM_HOSTS: ...`) and recreate the gateway (`docker compose up -d airs-gw-gateway`). MCP servers on private hosts need an entry too: see [`aigw-mcp-descriptor-pinning`](../aigw-mcp-descriptor-pinning/README.md) step 1, where this was tested.
 - [`airs-cli`](https://www.npmjs.com/package/@cdot65/prisma-airs-cli) with the tenant selected, and an SCM token for the mapping call. Also `jq` and `curl`.
 
 ## 1. Deploy the webhook with AIRS on
